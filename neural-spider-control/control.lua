@@ -1,0 +1,795 @@
+-- control.lua - Neural Vehicle Control
+
+local function log_debug(message)
+    log("[Neural Vehicle Control] " .. message)
+end
+
+-- Require modules
+local neural_connect = require("scripts.neural_connect")
+local neural_disconnect = require("scripts.neural_disconnect")
+local spidertron_gui = require("scripts.spidertron_gui")
+local mod_data = require("scripts.mod_data")
+local local_control_centre = require("scripts.control_centre")  -- Load this regardless
+
+-- Variable to hold the control_centre reference
+local control_centre = nil
+local use_control_centre = false
+
+if script.active_mods["space-exploration"] then
+    SE_compatibility = require("compatibility.se")
+    space_elevator_compatibility = require("compatibility.space_elevator_compatibility")
+    log_debug("Space Exploration compatibility loaded")
+end
+
+-- Track connections
+local last_connections = {}
+local dropdown_open = {}
+local pending_dropdown_updates = {}
+
+-- Helper function to count table entries
+function count_table(t)
+    if not t then return "nil" end
+    
+    local count = 0
+    for _ in pairs(t) do count = count + 1 end
+    return tostring(count)
+end
+
+-- Handle shortcut clicks
+script.on_event(defines.events.on_lua_shortcut, function(event)
+    local player = game.get_player(event.player_index)
+    
+    if event.prototype_name == "reconnect-last-vehicle" then
+        neural_connect.reconnect_to_last_vehicle(event.player_index)
+    elseif event.prototype_name == "open-neural-control" then
+        if use_control_centre then
+            -- Open Vehicle Control centre instead
+            remote.call("vehicle-control-centre", "open_control_centre", player.index)
+        else
+            -- Fall back to our own control centre
+            control_centre.toggle_gui(player)
+        end
+    end
+end)
+
+
+script.on_event("reconnect-to-last-vehicle", function(event)
+    local player = game.get_player(event.player_index)
+    neural_connect.reconnect_to_last_vehicle(event.player_index)
+end)
+
+script.on_event(defines.events.on_player_joined_game, function(event)
+    local player = game.get_player(event.player_index)
+    
+    -- Update shortcut visibility when player joins
+    neural_connect.update_shortcut_visibility(player)
+end)
+
+-- Initialize global data
+local function init_globals()
+    mod_data.init()
+    
+    -- Initialize all storage tables needed for entity tracking
+    storage.neural_spider_control = storage.neural_spider_control or {}
+    storage.neural_spider_control.dummy_engineers = storage.neural_spider_control.dummy_engineers or {}
+    storage.neural_spider_control.original_characters = storage.neural_spider_control.original_characters or {}
+    storage.neural_spider_control.connected_spidertrons = storage.neural_spider_control.connected_spidertrons or {}
+    storage.neural_spider_control.original_surfaces = storage.neural_spider_control.original_surfaces or {}
+    storage.neural_spider_control.neural_connections = storage.neural_spider_control.neural_connections or {}
+    storage.neural_spider_control.vehicle_types = storage.neural_spider_control.vehicle_types or {}
+    
+    -- Add ID tracking for persistent references
+    storage.neural_spider_control.connected_spidertron_ids = storage.neural_spider_control.connected_spidertron_ids or {}
+    storage.neural_spider_control.original_character_ids = storage.neural_spider_control.original_character_ids or {}
+    storage.neural_spider_control.dummy_engineer_ids = storage.neural_spider_control.dummy_engineer_ids or {}
+    
+    -- Space Exploration compatibility
+    if space_elevator_compatibility then
+        storage.locomotives_near_elevators = storage.locomotives_near_elevators or {}
+    end
+    
+    -- Health check functions
+    storage.health_check_functions = storage.health_check_functions or {}
+end
+
+-- Clean up storage data for a player
+local function clean_up_storage_data(player_index)
+    local function safely_clear_data(control_data)
+        if control_data then
+            for _, table_name in ipairs({
+                "dummy_engineers", 
+                "original_characters", 
+                "connected_spidertrons", 
+                "original_surfaces", 
+                "neural_connections",
+                "connected_spidertron_ids",
+                "original_character_ids",
+                "dummy_engineer_ids",
+                "vehicle_types"
+            }) do
+                if control_data[table_name] then
+                    control_data[table_name][player_index] = nil
+                end
+            end
+            
+            if control_data.health_check_functions and control_data.health_check_functions[player_index] then
+                script.on_nth_tick(60, nil)
+                control_data.health_check_functions[player_index] = nil
+            end
+        end
+    end
+
+    safely_clear_data(storage.neural_spider_control)
+    
+    -- Clear health check function
+    if storage.health_check_players then
+        storage.health_check_players[player_index] = nil
+    end
+end
+
+-- Register remote interface for Vehicle Control Center
+remote.add_interface("neural-spider-control", {
+    connect_to_vehicle = function(params)
+        -- Forward to the connect_to_spidertron function
+        neural_connect.connect_to_spidertron({
+            player_index = params.player_index,
+            spidertron = params.vehicle
+        })
+    end,
+    
+    disconnect_from_vehicle = function(params)
+        -- Forward to the disconnect_from_spidertron function
+        neural_disconnect.disconnect_from_spidertron({
+            player_index = params.player_index,
+            source_spidertron = params.vehicle
+        })
+    end
+})
+
+-- Check if locomotives are near space elevators (for Space Exploration mod)
+local function check_locomotives()
+    if space_elevator_compatibility then
+        if not storage.neural_spider_control or not storage.neural_spider_control.connected_spidertrons then
+            return
+        end
+
+        storage.locomotives_near_elevators = storage.locomotives_near_elevators or {}
+
+        for player_index, vehicle in pairs(storage.neural_spider_control.connected_spidertrons) do
+            if vehicle and vehicle.valid and vehicle.type == "locomotive" then
+                if space_elevator_compatibility.is_near_space_elevator(vehicle) then
+                    local player = game.get_player(player_index)
+                    if player and player.valid then
+                        neural_disconnect.disconnect_from_spidertron({player_index = player_index})
+                        player.print("Space Elevator interference detected: neural link disengaged.", {r=1, g=0.5, b=0})
+                    end
+                    storage.locomotives_near_elevators[vehicle.unit_number] = true
+                else
+                    storage.locomotives_near_elevators[vehicle.unit_number] = nil
+                end
+            end
+        end
+    end
+end
+
+-- Register the GUI handlers
+function register_gui_handlers()
+    -- Register control_centre GUI handlers
+    if control_centre and control_centre.register_gui then
+        control_centre.register_gui()
+    end
+    
+    -- Register common event handlers
+    script.on_event(defines.events.on_gui_opened, function(event)
+        spidertron_gui.on_gui_opened(event)
+    end)
+    
+    script.on_event(defines.events.on_gui_click, combined_gui_click_handler)
+    script.on_event(defines.events.on_gui_closed, function(event)
+        spidertron_gui.on_gui_closed(event)
+        if control_centre.on_gui_closed then
+            control_centre.on_gui_closed(event)
+        end
+    end)
+end
+
+-- Combined GUI click handler for all neural connection interfaces
+function combined_gui_click_handler(event)
+    if not event.element or not event.element.valid then return end
+
+    local player = game.get_player(event.player_index)
+    local element = event.element
+    local element_name = element.name
+
+    -- Rest of your handler for non-tagged elements
+    if element_name:find("^connect_") or 
+       element_name == "neural_disconnect" or 
+       element_name == "close_control_centre" then
+        log_debug("Delegating to control_centre")
+        control_centre.on_gui_click(event)
+    elseif element_name == "nsc_neural_connect_button" then  -- Changed from "spidertron_neural_connect_button"
+        log_debug("Delegating to spidertron_gui")
+        spidertron_gui.on_gui_click(event)
+    elseif element_name == "close_neural_control_centre" then
+        if player.gui.screen.neural_control_centre then
+            player.gui.screen.neural_control_centre.destroy()
+        end
+    else
+        log_debug("Unhandled GUI element clicked: " .. element_name)
+    end
+end
+
+
+-- Helper function to check if a character is a dummy engineer
+function is_dummy_engineer(entity)
+    if not entity or not entity.valid then
+        log_debug("Invalid entity passed to is_dummy_engineer")
+        return false
+    end
+    
+    log_debug("Checking if entity #" .. (entity.unit_number or "unknown") .. " is a dummy engineer")
+    
+    -- Safe check for storage table
+    if not storage then
+        log_debug("Storage table not available in is_dummy_engineer")
+        return false
+    end
+    
+    -- Check spider dummy engineers
+    if storage.neural_spider_control and storage.neural_spider_control.dummy_engineers then
+        for player_index, dummy_data in pairs(storage.neural_spider_control.dummy_engineers) do
+            log_debug("Comparing against dummy for player " .. player_index)
+            
+            if type(dummy_data) == "table" and dummy_data.entity then
+                -- Table format with entity reference and unit number
+                log_debug("Dummy is stored as a table with entity reference")
+                
+                -- Check if entity references match
+                if dummy_data.entity == entity then
+                    log_debug("Match found by direct entity reference")
+                    return true
+                end
+                
+                -- Check if unit numbers match
+                if entity.unit_number and dummy_data.unit_number == entity.unit_number then
+                    log_debug("Match found by unit number: " .. entity.unit_number)
+                    return true
+                end
+                
+                log_debug("No match. Dummy unit number: " .. (dummy_data.unit_number or "nil") .. 
+                          ", entity unit number: " .. (entity.unit_number or "nil"))
+            elseif dummy_data and dummy_data.valid then
+                -- Direct entity reference
+                log_debug("Dummy is stored as direct entity reference")
+                
+                -- Check direct reference
+                if dummy_data == entity then
+                    log_debug("Match found by direct comparison")
+                    return true
+                end
+                
+                -- Check unit numbers as fallback
+                if entity.unit_number and dummy_data.unit_number and 
+                   dummy_data.unit_number == entity.unit_number then
+                    log_debug("Match found by unit number fallback")
+                    return true
+                end
+                
+                log_debug("No match. Dummy unit number: " .. (dummy_data.unit_number or "nil") .. 
+                          ", entity unit number: " .. (entity.unit_number or "nil"))
+            else
+                log_debug("Invalid dummy data format or dummy is not valid")
+            end
+        end
+    else
+        log_debug("Neural control or dummy engineers table not found")
+    end
+    
+    log_debug("Entity is not a dummy engineer")
+    return false
+end
+
+-- List of restricted spider vehicles
+local restricted_spider_vehicles = {
+    "spiderbot",
+    "spiderdrone",
+    -- Add more as needed
+}
+
+-- Function to check if a vehicle is a restricted spider vehicle
+local function is_restricted_spider_vehicle(vehicle)
+    return vehicle and vehicle.type == "spider-vehicle" and table.find(restricted_spider_vehicles, vehicle.name)
+end
+
+-- Helper function to find an element in a table
+function table.find(t, value)
+    for _, v in pairs(t) do
+        if v == value then
+            return true
+        end
+    end
+    return false
+end
+
+-- Helper function to open the vehicle inventory
+local function open_vehicle_inventory(player)
+    if player.character and player.vehicle then
+        player.opened = player.vehicle
+    else
+        player.print("You are not currently controlling a vehicle.")
+    end
+end
+
+-- Helper function to find entities by unit number
+function find_entity_by_unit_number(unit_number)
+    if not unit_number then return nil end
+    
+    for _, surface in pairs(game.surfaces) do
+        -- Try to find a character first
+        local characters = surface.find_entities_filtered{type = "character"}
+        for _, character in pairs(characters) do
+            if character.unit_number == unit_number then
+                return character
+            end
+        end
+        
+        -- Try to find a spider vehicle
+        local spiders = surface.find_entities_filtered{type = "spider-vehicle"}
+        for _, spider in pairs(spiders) do
+            if spider.unit_number == unit_number then
+                return spider
+            end
+        end
+        
+        -- Try to find a locomotive
+        local locomotives = surface.find_entities_filtered{type = "locomotive"}
+        for _, locomotive in pairs(locomotives) do
+            if locomotive.unit_number == unit_number then
+                return locomotive
+            end
+        end
+        
+        -- Try to find a car
+        local cars = surface.find_entities_filtered{type = "car"}
+        for _, car in pairs(cars) do
+            if car.unit_number == unit_number then
+                return car
+            end
+        end
+    end
+    
+    return nil
+end
+
+-- Function to restore entity references from unit numbers after loading
+function restore_entity_references()
+    log_debug("Starting entity reference restoration")
+    
+    if not storage then 
+        log_debug("ERROR: storage table not available")
+        return
+    end
+    
+    -- Restore vehicle references
+    if storage.neural_spider_control then
+        -- Restore connected vehicles
+        if storage.neural_spider_control.connected_spidertron_ids then
+            for player_index, vehicle_id in pairs(storage.neural_spider_control.connected_spidertron_ids) do
+                local vehicle = find_entity_by_unit_number(vehicle_id)
+                if vehicle then
+                    storage.neural_spider_control.connected_spidertrons[player_index] = vehicle
+                    log_debug("Restored vehicle reference for player " .. player_index)
+                else
+                    log_debug("Failed to restore vehicle reference for player " .. player_index)
+                    -- Clean up invalid references
+                    storage.neural_spider_control.connected_spidertron_ids[player_index] = nil
+                end
+            end
+        end
+        
+        -- Restore original characters
+        if storage.neural_spider_control.original_character_ids then
+            for player_index, character_id in pairs(storage.neural_spider_control.original_character_ids) do
+                local character = find_entity_by_unit_number(character_id)
+                if character then
+                    storage.neural_spider_control.original_characters[player_index] = character
+                    log_debug("Restored original character reference for player " .. player_index)
+                else
+                    log_debug("Failed to restore original character reference for player " .. player_index)
+                    -- Clean up invalid references
+                    storage.neural_spider_control.original_character_ids[player_index] = nil
+                    
+                    -- Also clean up the related vehicle connection since we can't restore it properly
+                    storage.neural_spider_control.connected_spidertron_ids[player_index] = nil
+                    storage.neural_spider_control.connected_spidertrons[player_index] = nil
+                end
+            end
+        end
+        
+        -- Restore dummy engineers
+        if storage.neural_spider_control.dummy_engineer_ids then
+            for player_index, dummy_id in pairs(storage.neural_spider_control.dummy_engineer_ids) do
+                if type(dummy_id) == "number" then
+                    -- If stored as just a unit number
+                    local dummy_engineer = find_entity_by_unit_number(dummy_id)
+                    if dummy_engineer then
+                        storage.neural_spider_control.dummy_engineers[player_index] = {
+                            entity = dummy_engineer,
+                            unit_number = dummy_id
+                        }
+                        log_debug("Restored dummy engineer reference for player " .. player_index)
+                    else
+                        log_debug("Failed to restore dummy engineer reference for player " .. player_index)
+                        -- Clean up invalid references
+                        storage.neural_spider_control.dummy_engineer_ids[player_index] = nil
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Restart health monitoring for all active connections
+    if storage.neural_spider_control and storage.neural_spider_control.connected_spidertrons then
+        for player_index, _ in pairs(storage.neural_spider_control.connected_spidertrons) do
+            local player = game.get_player(player_index)
+            if player and player.valid then
+                neural_connect.start_health_monitor(player)
+                log_debug("Restarted health monitoring for vehicle connection for player " .. player.name)
+            end
+        end
+    end
+    
+    log_debug("Entity reference restoration completed")
+end
+
+-- Function to validate connections after loading
+local function validate_connections()
+    log_debug("Validating neural connections")
+    
+    -- Check each connected player
+    if storage.neural_spider_control and storage.neural_spider_control.connected_spidertron_ids then
+        for player_index, _ in pairs(storage.neural_spider_control.connected_spidertron_ids) do
+            local player = game.get_player(player_index)
+            
+            -- Make sure all required references exist and are valid
+            local vehicle_valid = storage.neural_spider_control.connected_spidertrons and 
+                               storage.neural_spider_control.connected_spidertrons[player_index] and
+                               storage.neural_spider_control.connected_spidertrons[player_index].valid
+                                  
+            local dummy_valid = storage.neural_spider_control.dummy_engineers and
+                             storage.neural_spider_control.dummy_engineers[player_index]
+                             
+            if type(dummy_valid) == "table" then
+                dummy_valid = dummy_valid.entity and dummy_valid.entity.valid
+            else
+                dummy_valid = dummy_valid and dummy_valid.valid
+            end
+            
+            local original_valid = storage.neural_spider_control.original_characters and
+                                storage.neural_spider_control.original_characters[player_index] and
+                                storage.neural_spider_control.original_characters[player_index].valid
+            
+            local all_valid = player and player.valid and vehicle_valid and dummy_valid and original_valid
+            
+            if not all_valid then
+                log_debug("Invalid connection found for player " .. player_index .. ", cleaning up")
+                clean_up_storage_data(player_index)
+                
+                -- If player exists, notify them
+                if player and player.valid then
+                    player.print("Neural connection could not be restored - the connected entity no longer exists.")
+                end
+            else
+                log_debug("Valid connection found for player " .. player.name)
+            end
+        end
+    end
+    
+    log_debug("Connection validation completed")
+end
+
+local function register_with_vehicle_control_centre()
+    if not remote.interfaces["vehicle-control-centre"] then return end
+    
+    log_debug("Registering buttons with Vehicle Control centre")
+    
+    -- Register the neural connect button for spidertrons
+    remote.call("vehicle-control-centre", "register_button", "neural-spidertron-control", { --line 499
+        action = "neural_connect",
+        vehicle_type = "spider-vehicle",
+        sprite = "neural-connection-sprite",
+        tooltip = {"neural-spidertron-gui.connect"},
+        priority = 10,
+        callback = "neural-spidertron-control.connect_vehicle"
+    })
+    
+    -- Register buttons for other vehicle types if those features are enabled
+
+    remote.call("vehicle-control-centre", "register_button", "neural-spidertron-control", {
+        action = "neural_connect_locomotive",
+        vehicle_type = "locomotive",
+        sprite = "neural-connection-sprite", 
+        tooltip = {"neural-locomotive-gui.connect"},
+        priority = 10,
+        callback = "neural-spidertron-control.connect_vehicle"
+    })
+
+    remote.call("vehicle-control-centre", "register_button", "neural-spidertron-control", {
+        action = "neural_connect_car",
+        vehicle_type = "car",
+        sprite = "neural-connection-sprite", 
+        tooltip = {"neural-car-gui.connect"},
+        priority = 10,
+        callback = "neural-spidertron-control.connect_vehicle"
+    })
+    
+    log_debug("Successfully registered buttons with Vehicle Control Centre")
+end
+
+
+-- Event handlers
+
+-- Initialize the mod
+script.on_init(function()
+    log_debug("Initializing Neural Vehicle Control")
+    if not storage then storage = {} end
+    init_globals()
+
+    if remote.interfaces["vehicle-control-centre"] then
+        use_control_centre = true
+        log_debug("Vehicle Control centre detected, using it")
+        register_with_vehicle_control_centre()
+    else
+        use_control_centre = false
+        log_debug("Vehicle Control centre not found, using fallback GUI")
+        control_centre = local_control_centre  -- Use the locally loaded module
+        register_gui_handlers()
+    end
+
+    log_debug("Initialization complete")
+end)
+
+script.on_configuration_changed(function(data)
+    log_debug("Configuration changed, updating storage data")
+    init_globals()
+
+    if remote.interfaces["vehicle-control-centre"] then
+        use_control_centre = true
+        log_debug("Vehicle Control centre detected on config change")
+        register_with_vehicle_control_centre()
+    else
+        use_control_centre = false
+        log_debug("Vehicle Control centre not found on config change, using fallback GUI")
+        control_centre = local_control_centre  -- Use the locally loaded module
+        register_gui_handlers()
+    end
+
+    for _, player in pairs(game.players) do
+        spidertron_gui.cleanup_old_gui_elements(player)
+    end
+
+    log_debug("Configuration update complete")
+end)
+
+-- Handle loading a saved game
+script.on_load(function()
+    log_debug("on_load running, storage exists: " .. tostring(storage ~= nil))
+end)
+
+-- Register first tick handler to restore entity references
+script.on_event(defines.events.on_tick, function(event)
+    if event.tick == 1 then
+        log_debug("First tick, storage exists: " .. tostring(storage ~= nil))
+        restore_entity_references()
+        validate_connections()
+        script.on_event(defines.events.on_tick, nil) -- Unregister this handler
+    end
+end)
+
+-- Register standard event handlers
+script.on_event(defines.events.on_gui_opened, function(event)
+    spidertron_gui.on_gui_opened(event)
+end)
+
+-- Access vehicle inventory
+script.on_event("neural-spidertron-inventory", function(event)
+    local player = game.get_player(event.player_index)
+    open_vehicle_inventory(player)
+end)
+
+-- Handle player entering/exiting vehicles
+script.on_event(defines.events.on_player_driving_changed_state, function(event)
+    local player = game.get_player(event.player_index)
+    local vehicle = event.entity
+    
+    log_debug(string.format("Player %s driving state changed. Vehicle: %s", player.name, vehicle and vehicle.name or "None"))
+    
+    if player.vehicle then
+        log_debug("Player entered a vehicle")
+        
+        if vehicle.type == "locomotive" then
+            if space_elevator_compatibility and (
+                space_elevator_compatibility.is_near_space_elevator(vehicle) or 
+                (storage.locomotives_near_elevators and storage.locomotives_near_elevators[vehicle.unit_number])
+            ) then
+                -- Handle Space Elevator restrictions
+                if is_dummy_engineer(player.character) then
+                    player.print("Cannot establish neural link near Space Elevator.", {r=1, g=0.5, b=0})
+                    neural_disconnect.disconnect_from_spidertron({player_index = player.index})
+                end
+            end
+        elseif is_restricted_spider_vehicle(vehicle) then
+            log_debug(string.format("WARNING: %s attempted to enter restricted spider vehicle: %s", player.name, vehicle.name))
+            
+            if not is_dummy_engineer(player.character) then
+                player.driving = false
+                player.print("You cannot directly control this type of spider vehicle.")
+                log_debug(string.format("Player %s prevented from entering restricted spider vehicle: %s", player.name, vehicle.name))
+            else
+                log_debug(string.format("Dummy engineer allowed to enter restricted spider vehicle: %s", vehicle.name))
+            end
+        end
+    else
+        log_debug("Player exited a vehicle")
+        
+        -- Log character details
+        log_debug("Character valid: " .. tostring(player.character and player.character.valid))
+        if player.character and player.character.valid then
+            log_debug("Character unit number: " .. tostring(player.character.unit_number))
+        end
+        
+        -- Check if this is a dummy engineer
+        if is_dummy_engineer(player.character) then
+            log_debug("Dummy engineer detected, checking for original character")
+            
+            -- Check if we can find the original character
+            if storage and storage.neural_spider_control and
+               storage.neural_spider_control.original_characters and
+               storage.neural_spider_control.original_characters[player.index] then
+                log_debug("Original character found, returning to engineer")
+                neural_disconnect.return_to_engineer(player, "spidertron")
+            else
+                log_debug("No original character found for dummy engineer")
+                player.print("Error: Could not revert to original character. Please report this issue.")
+            end
+        else
+            log_debug("Not a dummy engineer, skipping return to engineer")
+        end
+    end
+end)
+
+-- Handle player respawn
+script.on_event(defines.events.on_player_respawned, function(event)
+    local player = game.get_player(event.player_index)
+    if not player then return end
+
+    log_debug("Player " .. player.name .. " has respawned")
+    clean_up_storage_data(player.index)
+    log_debug("Respawn handling completed for player " .. player.name)
+end)
+
+-- Handle entity death events
+script.on_event(defines.events.on_entity_died, function(event)
+    local entity = event.entity
+    -- Pass to appropriate handlers
+    if entity.type == "character" then
+        log_debug("Character died: " .. entity.unit_number)
+        neural_connect.check_original_engineer_death(event)
+    elseif entity.type == "spider-vehicle" or entity.type == "locomotive" or entity.type == "car" then
+        log_debug(entity.type .. " died: " .. entity.unit_number)
+        neural_connect.on_vehicle_destroyed(event)
+    end
+end)
+
+-- Add admin command to open neural control centre
+--commands.add_command("open_neural_control", "Open the Neural Control Centre", control_centre.open_gui)
+
+-- Add debug command to show neural connection info
+commands.add_command("neural_debug", "Show neural connection debug info", function(command)
+    local player = game.get_player(command.player_index)
+    
+    -- Log intro
+    log_debug("=== Neural Control Debug Info ===")
+    log_debug("Requested by player: " .. player.name)
+    
+    -- Check if storage exists
+    if not storage then
+        log_debug("ERROR: storage table does not exist!")
+        player.print("ERROR: storage table not available")
+        return
+    end
+    
+    -- Check control data
+    log_debug("Vehicle Control Data:")
+    if not storage.neural_spider_control then
+        log_debug("- neural_spider_control table doesn't exist")
+    else
+        -- Log dummy engineers
+        log_debug("- Dummy Engineers:")
+        if storage.neural_spider_control.dummy_engineers then
+            for player_index, dummy_data in pairs(storage.neural_spider_control.dummy_engineers) do
+                local player_name = game.get_player(player_index) and game.get_player(player_index).name or "unknown"
+                if type(dummy_data) == "table" and dummy_data.entity then
+                    log_debug("  - Player " .. player_name .. " (#" .. player_index .. "): " .. 
+                              (dummy_data.entity and dummy_data.entity.valid and 
+                               "valid entity #" .. dummy_data.unit_number or "invalid entity"))
+                else
+                    log_debug("  - Player " .. player_name .. " (#" .. player_index .. "): " .. 
+                              (dummy_data and dummy_data.valid and 
+                               "valid entity #" .. dummy_data.unit_number or "invalid entity"))
+                end
+            end
+        else
+            log_debug("  - dummy_engineers table doesn't exist")
+        end
+        
+        -- Log original characters
+        log_debug("- Original Characters:")
+        if storage.neural_spider_control.original_characters then
+            for player_index, character in pairs(storage.neural_spider_control.original_characters) do
+                local player_name = game.get_player(player_index) and game.get_player(player_index).name or "unknown"
+                log_debug("  - Player " .. player_name .. " (#" .. player_index .. "): " .. 
+                          (character and character.valid and 
+                           "valid entity #" .. character.unit_number or "invalid entity"))
+            end
+        else
+            log_debug("  - original_characters table doesn't exist")
+        end
+        
+        -- Log connected vehicles
+        log_debug("- Connected Vehicles:")
+        if storage.neural_spider_control.connected_spidertrons then
+            for player_index, vehicle in pairs(storage.neural_spider_control.connected_spidertrons) do
+                local player_name = game.get_player(player_index) and game.get_player(player_index).name or "unknown"
+                local vehicle_type = storage.neural_spider_control.vehicle_types and 
+                                   storage.neural_spider_control.vehicle_types[player_index] or "unknown"
+                log_debug("  - Player " .. player_name .. " (#" .. player_index .. "): " .. 
+                          (vehicle and vehicle.valid and 
+                           "valid " .. vehicle_type .. " #" .. vehicle.unit_number or "invalid entity"))
+            end
+        else
+            log_debug("  - connected_vehicles table doesn't exist")
+        end
+        
+        -- Log unit number IDs
+        log_debug("- Stored Unit Numbers:")
+        if storage.neural_spider_control.connected_spidertron_ids then
+            for player_index, unit_number in pairs(storage.neural_spider_control.connected_spidertron_ids) do
+                local player_name = game.get_player(player_index) and game.get_player(player_index).name or "unknown"
+                log_debug("  - Player " .. player_name .. " (#" .. player_index .. "): vehicle #" .. unit_number)
+            end
+        else
+            log_debug("  - connected_vehicle_ids table doesn't exist")
+        end
+        
+        if storage.neural_spider_control.original_character_ids then
+            for player_index, unit_number in pairs(storage.neural_spider_control.original_character_ids) do
+                local player_name = game.get_player(player_index) and game.get_player(player_index).name or "unknown"
+                log_debug("  - Player " .. player_name .. " (#" .. player_index .. "): original character #" .. unit_number)
+            end
+        else
+            log_debug("  - original_character_ids table doesn't exist")
+        end
+        
+        if storage.neural_spider_control.dummy_engineer_ids then
+            for player_index, unit_number in pairs(storage.neural_spider_control.dummy_engineer_ids) do
+                local player_name = game.get_player(player_index) and game.get_player(player_index).name or "unknown"
+                log_debug("  - Player " .. player_name .. " (#" .. player_index .. "): dummy engineer #" .. unit_number)
+            end
+        else
+            log_debug("  - dummy_engineer_ids table doesn't exist")
+        end
+    end
+    
+    -- Print summary to player
+    --player.print("Neural connection debug info written to log")
+    log_debug("=== End Neural Control Debug Info ===")
+end)
+
+-- GUI event handlers
+script.on_event(defines.events.on_gui_click, combined_gui_click_handler)
+
+-- Handle GUI closed events with a combined handler
+script.on_event(defines.events.on_gui_closed, function(event)
+    spidertron_gui.on_gui_closed(event)
+end)

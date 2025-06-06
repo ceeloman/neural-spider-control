@@ -1,0 +1,2 @@
+-- Space Spidertron "by Stringweasel"
+-- this was simple and removed any checks for "spidertron is called spidertron"

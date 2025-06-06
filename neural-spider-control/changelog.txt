@@ -1,0 +1,148 @@
+
+---------------------------------------------------------------------------------------------------
+Version: 2.3.0
+Date: 2025-05-08
+  Bug fix:
+    - Handles connected vehicle being destroyed when the surface is not the original engineers surface
+---------------------------------------------------------------------------------------------------
+Version: 2.3.0
+Date: 2025-05-08
+  Features:
+    - GUI Removed and mod is now dependent on Vehicle Control Center
+    - Support for all vehicles has been added 
+---------------------------------------------------------------------------------------------------
+Version: 2.2.0
+Date: 2025-04-27
+  Features:
+    - Gui revamp (inspired by Spidertron control center)
+      - Easily filter spiders by surface and spider-type
+      - New icons to remotely connect to Vehicles
+    - New Shortcuts to open the Control Centre and to reconnect to last vehicle
+    - Use CONTOL + Z to reconnect to last vehicle too
+---------------------------------------------------------------------------------------------------
+Version: 2.1.0
+Date: 2025-04-05
+  Bug fix:
+    - Crash when reconnecting to player engineer from a connection on another surface made through the map/remote view
+---------------------------------------------------------------------------------------------------
+Version: 2.0.0
+Date: 2025-03-29
+  Bugs:
+    - Load error fixed for non-Space Age factorio 2.0
+---------------------------------------------------------------------------------------------------
+Version: 1.0.0
+Date: 2025-03-24
+  Version Update:
+    - Update for Factorio Version 2.0
+---------------------------------------------------------------------------------------------------
+Version: 0.3.0
+Date: 2024-10-01
+  Compatibility:
+    - Support for Spiderdrones
+---------------------------------------------------------------------------------------------------
+Version: 0.2.2
+Date: 2024-09-27
+  Bugfixes:
+    - Crashes upon death fixed
+---------------------------------------------------------------------------------------------------
+Version: 0.2.1
+Date: 2024-09-27
+  Features:
+    - Added feature to connect into trains
+    - Fail safe for SE Space Elevator
+---------------------------------------------------------------------------------------------------
+Version: 0.1.27
+Date: 2024-09-17
+  Features:
+    - Support for non-drivable Spider-entities
+    - Compatibility with Spiderbots
+---------------------------------------------------------------------------------------------------
+Version: 0.1.26
+Date: 2024-09-13
+  Features:
+    - More bug fixes
+---------------------------------------------------------------------------------------------------
+Version: 0.1.25
+Date: 2024-09-12
+  Features:
+    - Further GUI Updates
+---------------------------------------------------------------------------------------------------
+Version: 0.1.24
+Date: 2024-09-12
+  Features:
+    - Bug Fixes
+---------------------------------------------------------------------------------------------------
+Version: 0.1.23
+Date: 2024-09-10
+  Features:
+    - GUI Updates
+  Bugs:
+    - Map stays open if connecting via map
+---------------------------------------------------------------------------------------------------
+Version: 0.1.22
+Date: 2024-09-09
+  Features:
+    - Space Spidertron Compatibility
+---------------------------------------------------------------------------------------------------
+Version: 0.1.21
+Date: 2024-09-09
+  Bug Fixes:
+    - Neural connections remembered upon loading
+---------------------------------------------------------------------------------------------------
+Version: 0.1.9
+Date: 2024-09-05
+  Features:
+    - Space Exploration Compatibility
+---------------------------------------------------------------------------------------------------
+Version: 0.1.8
+Date: 2024-09-05
+  Features:
+    - Connect to a spidertron within the spidertrons GUI
+    - Produces the correct GUI on death
+  Bugs:
+    - When connecting to a Spidertron via the map the map stays open - add a check and close map
+---------------------------------------------------------------------------------------------------
+Version: 0.1.7
+Date: 2024-09-04
+  Features:
+    - Handles disconnecting, taking damage, and deaths of both the engineer and connected spidertron correctly.
+---------------------------------------------------------------------------------------------------
+Version: 0.1.6
+Date: 2024-09-04
+  Features:
+    - Handles Spidertron being destroyed while connected
+      - Spills inventory items
+      - Returns player back to the engineer
+    - Correctly tracks players death and respawns the player
+  Bugs:
+    - Maybe handle the respawn better - inline with vanilla game ended gui
+---------------------------------------------------------------------------------------------------
+Version: 0.1.5
+Date: 2024-09-04
+  Features:
+    - Handles the engineer taking damage while neurally connected - forces transfer back to the player
+---------------------------------------------------------------------------------------------------
+Version: 0.1.4
+Date: 2024-09-04
+  Features:
+    - "SHIFT + E" Shortcut to open spiders inventory when piloting
+    - Handles crafting queue returning items to the inventory upon disconnect
+---------------------------------------------------------------------------------------------------
+Version: 0.1.3
+Date: 2024-09-03
+  Features:
+    - Neural link character engineers inventory is transfered to the Spidertron trunk - if trunk if full then items are spilled
+    - Extends reach, resource reach, item pickup, loot pickup, item drop distances while neurally controlling the Spidertron
+    - Increases mining speed by 2x while driving Spidertron
+---------------------------------------------------------------------------------------------------
+Version: 0.1.1
+Date: 2024-09-03
+  Features:
+    - When connecting to a Spidertron the engineer has control over the weapons (thank you DaveMcW)
+---------------------------------------------------------------------------------------------------
+Version: 0.1.0
+Date: 2024-09-01
+  Features:
+    - Initial release
+    - Added ability to transfer consciousness to Spidertrons
+    - Added ability to transfer back to player character

@@ -1,0 +1,12 @@
+{
+    "name": "neural-spider-control",
+    "version": "2.4.0",
+    "title": "Enhanced Remote Vehicle Control",
+    "author": "Cee lo",
+    "factorio_version": "2.0",
+    "dependencies": [
+      "base >= 2.0",
+      "vehicle-control-center >= 1.0.0"
+    ],
+    "description": "Does Remote Driving feel too remote? Not anymore, craft, build, and move items around the vehicle as if you were driving it. No more remote restrictions"
+}

@@ -1,0 +1,4 @@
+-- Spidertron Dock "by Stringweasel"
+--Incompatibility with spider docks ""
+-- - When entering a dock while neurally controlling - the dummy engineer is forcibly exited
+-- - When neurally connecting to a docked spidertron the dummy engineer is teleported to its location but clipped into the doc

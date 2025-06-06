@@ -1,0 +1,12 @@
+--Spiderbots "by ashersky"
+-- 1. Id like some progression where you can take over a small bot and operate from there 
+-- 2. Making bots like RC units for building, scouting, attacks
+-- 3. Spiderbots dont have an inventory but do have an interesting mechanic where the spiderbots complete your work while connecting to the engineers inventory
+--  - Might need to create a slightly larger spider unit as the control / alternatively create a spiderworker (rename) and spiderbot (has an inventory)
+--  - Might be easier just to make a new entity slightly bigger than the spiderbots that can be neurally linked into
+--- Will need to be drivable through neural link but not by pressing enter
+--- So will need to create a check for is spider entity is drivable or not
+
+-- making them drivable is easy enough
+-- Would be cool if you could only drive them via neural connection
+-- Maybe add a permission to the bots in the data updates stage

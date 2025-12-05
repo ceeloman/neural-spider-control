@@ -17,14 +17,22 @@ local DROP_DISTANCE = 10
 local LOOT_PICKUP_DISTANCE = 10
 
 local function log_debug(message)
-    log("[Neural Vehicle Control] " .. message)
+    -- Logging disabled
 end
 
 local neural_connect = {}
-local last_connections = {}
+
+-- Initialize last_connections in storage if it doesn't exist
+local function get_last_connections()
+    if not storage.last_connections then
+        storage.last_connections = {}
+    end
+    return storage.last_connections
+end
 
 -- Track the last connected vehicle
 function neural_connect.track_connection(player_index, vehicle_type, vehicle)
+    local last_connections = get_last_connections()
     last_connections[player_index] = {
         type = vehicle_type,
         vehicle_id = vehicle.unit_number,
@@ -41,7 +49,8 @@ function neural_connect.reconnect_to_last_vehicle(player_index)
     
     log_debug("Trying to reconnect player " .. player.name .. " to last vehicle")
     
-    -- Get last connection info
+    -- Get last connection info from storage
+    local last_connections = get_last_connections()
     local last_connection = last_connections[player_index]
     if not last_connection then
         player.print("No previous neural connection found.")
@@ -79,20 +88,23 @@ function neural_connect.reconnect_to_last_vehicle(player_index)
     
     if not vehicle or not vehicle.valid then
         player.print("Previous vehicle could not be found. It may have been destroyed.")
+        local last_connections = get_last_connections()
         last_connections[player_index] = nil
         return
     end
     
-    -- Check if player is already connected to a vehicle
-    local already_connected = false
+    -- If player is already connected to a vehicle, disconnect first
     if storage.neural_spider_control and storage.neural_spider_control.dummy_engineers and 
        storage.neural_spider_control.dummy_engineers[player_index] then
-        already_connected = true
-    end
-    
-    if already_connected then
-        player.print("You are already connected to a vehicle. Disconnect first.")
-        return
+        local current_vehicle = storage.neural_spider_control.connected_spidertrons and 
+                               storage.neural_spider_control.connected_spidertrons[player_index]
+        if current_vehicle then
+            log_debug("Player already connected, disconnecting from current vehicle #" .. current_vehicle.unit_number)
+            neural_disconnect.disconnect_from_spidertron({
+                player_index = player_index,
+                source_spidertron = current_vehicle
+            })
+        end
     end
     
     -- Reconnect based on vehicle type
@@ -114,6 +126,7 @@ function neural_connect.update_shortcut_visibility(player)
     local player_index = player.index
     
     -- Update reconnect shortcut based on last connection availability
+    local last_connections = get_last_connections()
     local has_last_connection = last_connections[player_index] ~= nil
     
     -- Enable/disable the reconnect shortcut based on whether there's a last connection
@@ -315,9 +328,172 @@ function neural_connect.connect_to_spidertron(command)
         return
     end
 
-    if vehicle.get_driver() then
-        player.print("This vehicle is already occupied.")
+    -- Check if player is already connected to this vehicle
+    if storage.neural_spider_control and storage.neural_spider_control.connected_spidertrons and 
+       storage.neural_spider_control.connected_spidertrons[player.index] then
+        local current_vehicle = storage.neural_spider_control.connected_spidertrons[player.index]
+        if current_vehicle and current_vehicle.valid and current_vehicle == vehicle then
+            log_debug("Player " .. player.name .. " already connected to vehicle #" .. vehicle.unit_number)
+            player.print("Already connected to this vehicle.", {r=0.5, g=0.5, b=0.5})
+            return
+        end
+    end
+    
+    -- Check if vehicle has a driver
+    local current_driver = vehicle.get_driver()
+    
+    -- Check for any dummy engineer in this vehicle (orphaned or active)
+    local dummy_engineer_to_reuse = nil
+    local is_orphaned = false
+    local orphaned_data = nil
+    
+    -- First check for orphaned engineer
+    local orphaned_engineer, orphaned_data_check = neural_disconnect.find_orphaned_engineer_for_vehicle(vehicle)
+    if orphaned_engineer and orphaned_engineer.valid then
+        dummy_engineer_to_reuse = orphaned_engineer
+        is_orphaned = true
+        orphaned_data = orphaned_data_check
+    -- If no orphaned engineer, check if current driver is a dummy engineer (active connection or old data)
+    elseif current_driver and current_driver.valid and current_driver.type == "character" then
+        -- Check if it's in our dummy engineers storage (active connection)
+        if storage.neural_spider_control and storage.neural_spider_control.dummy_engineers then
+            for player_idx, dummy_data in pairs(storage.neural_spider_control.dummy_engineers) do
+                local dummy_entity = type(dummy_data) == "table" and dummy_data.entity or dummy_data
+                if dummy_entity == current_driver then
+                    dummy_engineer_to_reuse = current_driver
+                    log_debug("Found active dummy engineer #" .. current_driver.unit_number .. " in vehicle (player " .. player_idx .. ")")
+                    break
+                end
+            end
+        end
+    end
+    
+    if dummy_engineer_to_reuse and dummy_engineer_to_reuse.valid then
+        -- Found dummy engineer for this vehicle - reuse it
+        log_debug("Found dummy engineer for vehicle #" .. vehicle.unit_number .. ", reusing it (orphaned: " .. tostring(is_orphaned) .. ")")
+        
+        -- Disconnect from any existing active connection first
+        if storage.neural_spider_control and storage.neural_spider_control.dummy_engineers and 
+           storage.neural_spider_control.dummy_engineers[player.index] then
+            local source_vehicle = storage.neural_spider_control.connected_spidertrons[player.index]
+            if source_vehicle then
+                log_debug("Disconnecting from source vehicle #" .. source_vehicle.unit_number)
+            end
+            neural_disconnect.disconnect_from_spidertron({
+                player_index = player.index,
+                source_spidertron = source_vehicle
+            })
+        end
+        
+        -- Reuse the dummy engineer
+        storage.neural_spider_control.dummy_engineers[player.index] = {
+            entity = dummy_engineer_to_reuse,
+            unit_number = dummy_engineer_to_reuse.unit_number
+        }
+        storage.neural_spider_control.connected_spidertrons[player.index] = vehicle
+        storage.neural_spider_control.vehicle_types[player.index] = vehicle_type
+        storage.neural_spider_control.connected_spidertron_ids[player.index] = vehicle.unit_number
+        storage.neural_spider_control.dummy_engineer_ids[player.index] = dummy_engineer_to_reuse.unit_number
+        
+        -- Remove from orphaned list if it was orphaned
+        if is_orphaned and storage.orphaned_dummy_engineers then
+            storage.orphaned_dummy_engineers[dummy_engineer_to_reuse.unit_number] = nil
+        end
+        
+        -- Ensure storage is fully set up before changing character (to prevent event handlers from seeing inconsistent state)
+        -- Initialize storage tables if needed
+        if not storage.neural_spider_control.original_characters then storage.neural_spider_control.original_characters = {} end
+        if not storage.neural_spider_control.original_character_ids then storage.neural_spider_control.original_character_ids = {} end
+        if not storage.neural_spider_control.original_health then storage.neural_spider_control.original_health = {} end
+        if not storage.neural_spider_control.original_surfaces then storage.neural_spider_control.original_surfaces = {} end
+        
+        -- Store original character if not already stored
+        if not storage.neural_spider_control.original_characters[player.index] then
+            storage.neural_spider_control.original_characters[player.index] = player.character
+            storage.neural_spider_control.original_character_ids[player.index] = player.character.unit_number
+            storage.neural_spider_control.original_health[player.index] = player.character.health
+            storage.neural_spider_control.original_surfaces[player.index] = player.surface.index
+        end
+        
+        -- Reconnect player to the engineer
+        -- Set a flag to prevent exit handler from running during reconnection
+        storage.reconnecting_players = storage.reconnecting_players or {}
+        storage.reconnecting_players[player.index] = true
+        
+        -- Move player to the dummy engineer (don't create new one, just take control)
+        -- The dummy engineer should already be in the vehicle, so we just need to assign it to the player
+        player.character = nil
+        if player.surface ~= vehicle.surface then
+            player.teleport(vehicle.position, vehicle.surface)
+        end
+        player.character = dummy_engineer_to_reuse
+        
+        -- The engineer should already be in the vehicle as driver
+        -- Only call set_driver if it's not already the driver
+        if player.character and player.character.valid then
+            local current_driver = vehicle.get_driver()
+            if current_driver ~= player.character then
+                log_debug("Engineer not driver, setting as driver")
+                vehicle.set_driver(player.character)
+            else
+                log_debug("Engineer already driver, no action needed")
+            end
+        end
+        
+        -- Clear the reconnecting flag after we're done (at end of function)
+        -- This prevents the exit handler from interfering during reconnection
+        
+        -- Start health monitoring
+        neural_connect.start_health_monitor(player)
+        
+        -- Track connection
+        local vehicle_type_name = "Vehicle"
+        if vehicle_type == "spider-vehicle" then
+            vehicle_type_name = "Spidertron"
+        elseif vehicle_type == "locomotive" then
+            vehicle_type_name = "Locomotive"
+        elseif vehicle_type == "car" then
+            vehicle_type_name = "Car"
+        end
+        -- Don't track connection here - it will be tracked on disconnect
+        neural_connect.update_shortcut_visibility(player)
+        
+        player.create_local_flying_text{
+            text = "Reconnected to vehicle.",
+            position = vehicle.position,
+            color = {r=0, g=1, b=0}
+        }
+        
+        log_debug("Reconnected player " .. player.name .. " to vehicle #" .. vehicle.unit_number .. " using existing dummy engineer")
+        
+        -- Clear the reconnecting flag now that we're done
+        if storage.reconnecting_players then
+            storage.reconnecting_players[player.index] = nil
+        end
+        
         return
+    end
+    
+    -- Check if vehicle has a real driver (not an orphaned engineer)
+    if current_driver then
+        -- Check if it's a real character (not a dummy engineer we know about)
+        local is_known_dummy = false
+        if storage.neural_spider_control and storage.neural_spider_control.dummy_engineers then
+            for _, dummy_data in pairs(storage.neural_spider_control.dummy_engineers) do
+                if type(dummy_data) == "table" and dummy_data.entity == current_driver then
+                    is_known_dummy = true
+                    break
+                elseif dummy_data == current_driver then
+                    is_known_dummy = true
+                    break
+                end
+            end
+        end
+        
+        if not is_known_dummy then
+            player.print("This vehicle is already occupied.")
+            return
+        end
     end
     
     -- Disconnect from any existing connections first
@@ -429,6 +605,15 @@ function neural_connect.connect_to_spidertron(command)
 
     -- Put the dummy engineer into the vehicle
     vehicle.set_driver(dummy_engineer)
+    
+    -- Ensure player is in the driver's seat
+    -- Check if player's character is in the vehicle and is the driver
+    if player.character and player.character.valid then
+        if player.character.vehicle ~= vehicle or vehicle.get_driver() ~= player.character then
+            log_debug("Player not in driver's seat after connection, moving to driver's seat")
+            vehicle.set_driver(player.character)
+        end
+    end
 
     -- Store connection data for persistence
     storage.player_connections = storage.player_connections or {}
@@ -470,10 +655,8 @@ function neural_connect.connect_to_spidertron(command)
     
     log_debug("Neural connection established for player " .. player.name .. " with vehicle #" .. vehicle.unit_number)
 
-    -- Track this connection for later reconnection
-    neural_connect.track_connection(player.index, vehicle_type_name:lower(), vehicle)
-
-    -- Update shortcut visibility
+    -- Don't track connection here - it will be tracked on disconnect
+    -- Update shortcut visibility (will be updated when we disconnect)
     neural_connect.update_shortcut_visibility(player)
 end
 
@@ -484,6 +667,7 @@ function neural_connect.on_vehicle_destroyed(event)
     
     -- Check for any vehicle types we care about
     if entity.type == "spider-vehicle" or entity.type == "locomotive" or entity.type == "car" then
+        -- Check for active connections
         if storage.neural_spider_control and storage.neural_spider_control.connected_spidertrons then
             for player_index, connected_vehicle in pairs(storage.neural_spider_control.connected_spidertrons) do
                 if connected_vehicle and connected_vehicle.valid and connected_vehicle == entity then
@@ -493,6 +677,28 @@ function neural_connect.on_vehicle_destroyed(event)
                         neural_disconnect.emergency_disconnect(player, true)
                     end
                 end
+            end
+        end
+        
+        -- Check for orphaned engineers in this vehicle
+        if storage.orphaned_dummy_engineers then
+            local vehicle_id = entity.unit_number
+            local to_remove = {}
+            
+            for unit_number, data in pairs(storage.orphaned_dummy_engineers) do
+                if data.vehicle_id == vehicle_id then
+                    local engineer = data.entity
+                    if engineer and engineer.valid then
+                        log_debug("Vehicle destroyed, cleaning up orphaned engineer #" .. unit_number)
+                        neural_disconnect.force_destroy_orphaned_engineer(engineer, data.player_index, false)
+                        table.insert(to_remove, unit_number)
+                    end
+                end
+            end
+            
+            -- Remove from storage
+            for _, unit_number in ipairs(to_remove) do
+                storage.orphaned_dummy_engineers[unit_number] = nil
             end
         end
     end

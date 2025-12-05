@@ -8,7 +8,7 @@ local locomotive_gui = {}
 
 
 local function log_debug(message)
-    log("[Neural Locomotive Control] " .. message)
+    -- Logging disabled
 end
 
 -- Function to add the neural connect button to the locomotive GUI using relative GUI

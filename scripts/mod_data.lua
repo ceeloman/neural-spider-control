@@ -4,7 +4,7 @@
 local mod_data = {}
 
 local function log_debug(message)
-    log("[Neural Vehicle Control] " .. message)
+    -- Logging disabled
 end
 
 -- Initialize mod data

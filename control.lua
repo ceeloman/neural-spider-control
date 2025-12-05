@@ -1,7 +1,7 @@
 -- control.lua - Neural Vehicle Control
 
 local function log_debug(message)
-    log("[Neural Vehicle Control] " .. message)
+    -- Logging disabled
 end
 
 -- Require modules
@@ -428,13 +428,29 @@ function restore_entity_references()
         end
     end
     
-    -- Restart health monitoring for all active connections
+    -- Restart health monitoring for all active connections and restore last_connections
     if storage.neural_spider_control and storage.neural_spider_control.connected_spidertrons then
-        for player_index, _ in pairs(storage.neural_spider_control.connected_spidertrons) do
+        for player_index, vehicle in pairs(storage.neural_spider_control.connected_spidertrons) do
             local player = game.get_player(player_index)
             if player and player.valid then
                 neural_connect.start_health_monitor(player)
                 log_debug("Restarted health monitoring for vehicle connection for player " .. player.name)
+                
+                -- Restore last_connections for reconnection functionality
+                if vehicle and vehicle.valid then
+                    local vehicle_type = storage.neural_spider_control.vehicle_types and 
+                                       storage.neural_spider_control.vehicle_types[player_index] or "spider-vehicle"
+                    local vehicle_type_name = "spidertron"
+                    if vehicle_type == "spider-vehicle" then
+                        vehicle_type_name = "spidertron"
+                    elseif vehicle_type == "locomotive" then
+                        vehicle_type_name = "locomotive"
+                    elseif vehicle_type == "car" then
+                        vehicle_type_name = "car"
+                    end
+                    neural_connect.track_connection(player_index, vehicle_type_name, vehicle)
+                    log_debug("Restored last_connections for player " .. player.name .. " with " .. vehicle_type_name .. " #" .. vehicle.unit_number)
+                end
             end
         end
     end
@@ -589,6 +605,29 @@ end)
 -- Register standard event handlers
 script.on_event(defines.events.on_gui_opened, function(event)
     spidertron_gui.on_gui_opened(event)
+    
+    -- Check if player opened an orphaned dummy engineer's inventory directly
+    if event.gui_type == defines.gui_type.entity and event.entity and event.entity.valid then
+        if event.entity.type == "character" then
+            local character = event.entity
+            local player = game.get_player(event.player_index)
+            
+            -- Check if this is an orphaned dummy engineer
+            if storage.orphaned_dummy_engineers then
+                for unit_number, data in pairs(storage.orphaned_dummy_engineers) do
+                    if data.entity == character then
+                        log_debug("Player " .. player.name .. " interacted with orphaned dummy engineer #" .. unit_number)
+                        -- Force destroy and spill
+                        neural_disconnect.force_destroy_orphaned_engineer(character, data.player_index, true)
+                        player.print("Dummy engineer cleaned up.", {r=1, g=0.5, b=0})
+                        -- Close the GUI since engineer is destroyed
+                        player.opened = nil
+                        return
+                    end
+                end
+            end
+        end
+    end
 end)
 
 -- Access vehicle inventory
@@ -606,6 +645,66 @@ script.on_event(defines.events.on_player_driving_changed_state, function(event)
     
     if player.vehicle then
         log_debug("Player entered a vehicle")
+        
+        -- Check if vehicle has an active remote connection
+        local has_active_connection, active_player_index = neural_disconnect.vehicle_has_active_connection(vehicle)
+        if has_active_connection and not is_dummy_engineer(player.character) then
+            -- Player trying to physically enter a vehicle with active remote connection
+            player.driving = false
+            player.print("Cannot enter: Remote connection active. Disconnect first.", {r=1, g=0.5, b=0})
+            log_debug("Player " .. player.name .. " prevented from entering vehicle with active remote connection")
+            return
+        end
+        
+        -- Check if vehicle has an orphaned dummy engineer
+        local orphaned_engineer, orphaned_data = neural_disconnect.find_orphaned_engineer_for_vehicle(vehicle)
+        if orphaned_engineer and orphaned_engineer.valid and not is_dummy_engineer(player.character) then
+            -- Player physically entering vehicle with orphaned engineer
+            -- Let them enter normally, then clean up the orphaned engineer
+            log_debug("Player " .. player.name .. " entering vehicle with orphaned engineer, cleaning up orphaned engineer")
+            
+            -- Store unit_number before destroying (can't access after destroy)
+            local engineer_unit_number = orphaned_engineer.unit_number
+            
+            -- Cancel crafting queue
+            neural_disconnect.cancel_crafting_queue(orphaned_engineer)
+            
+            -- Spill inventory
+            neural_disconnect.spill_inventory(orphaned_engineer, orphaned_engineer.get_main_inventory())
+            local trash_inventory = orphaned_engineer.get_inventory(defines.inventory.character_trash)
+            if trash_inventory and not trash_inventory.is_empty() then
+                neural_disconnect.spill_inventory(orphaned_engineer, trash_inventory)
+            end
+            
+            -- Remove from orphaned list BEFORE destroying (need unit_number)
+            if storage.orphaned_dummy_engineers then
+                storage.orphaned_dummy_engineers[engineer_unit_number] = nil
+            end
+            
+            -- Destroy the orphaned engineer
+            if orphaned_engineer.valid then
+                orphaned_engineer.destroy()
+            end
+            
+            -- Show message
+            for _, p in pairs(game.players) do
+                if p.surface == vehicle.surface then
+                    p.create_local_flying_text{
+                        text = "Remote connected engineer destroyed, items have spilled",
+                        position = vehicle.position,
+                        color = {r=1, g=0.5, b=0}
+                    }
+                end
+            end
+            
+            -- Ensure player's character is in the driver's seat
+            if player.character and player.character.valid then
+                if player.character.vehicle ~= vehicle or vehicle.get_driver() ~= player.character then
+                    log_debug("Player not in driver's seat after entering, moving to driver's seat")
+                    vehicle.set_driver(player.character)
+                end
+            end
+        end
         
         if vehicle.type == "locomotive" then
             if space_elevator_compatibility and (
@@ -639,6 +738,12 @@ script.on_event(defines.events.on_player_driving_changed_state, function(event)
         end
         
         -- Check if this is a dummy engineer
+        -- Skip if we're in the middle of reconnecting (to prevent exit handler from interfering)
+        if storage.reconnecting_players and storage.reconnecting_players[player.index] then
+            log_debug("Player is reconnecting, skipping exit handler")
+            return
+        end
+        
         if is_dummy_engineer(player.character) then
             log_debug("Dummy engineer detected, checking for original character")
             

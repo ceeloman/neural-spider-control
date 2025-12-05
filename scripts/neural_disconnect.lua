@@ -2,8 +2,270 @@ local mod_data = require("scripts.mod_data")
 
 local neural_disconnect = {}
 
+-- Configuration: Periodic cleanup interval (in ticks, 60 ticks = 1 second)
+local CLEANUP_INTERVAL_TICKS = 54000  -- 15 minutes
+
 local function log_debug(message)
-    log("[Neural Vehicle Control] " .. message)
+    -- Logging disabled
+end
+
+-- ============================================================================
+-- ORPHANED ENGINEER MANAGEMENT
+-- ============================================================================
+-- Future Vehicle Control Centre features:
+-- - Show list of all active/orphaned connections
+-- - Display vehicle name/type, time since disconnect, reason kept alive
+-- - Quick reconnect button for each connection
+-- - Manual cleanup button
+-- ============================================================================
+
+-- Check if dummy engineer should be kept alive
+function neural_disconnect.should_keep_alive(dummy_engineer)
+    if not dummy_engineer or not dummy_engineer.valid then
+        return false
+    end
+    
+    -- Keep alive if crafting
+    if dummy_engineer.crafting_queue_size > 0 then
+        return true
+    end
+    
+    -- Keep alive if has items in main inventory
+    local main_inventory = dummy_engineer.get_main_inventory()
+    if main_inventory and not main_inventory.is_empty() then
+        return true
+    end
+    
+    -- Keep alive if has logistic trash items
+    local trash_inventory = dummy_engineer.get_inventory(defines.inventory.character_trash)
+    if trash_inventory and not trash_inventory.is_empty() then
+        return true
+    end
+    
+    return false
+end
+
+-- Get disconnect reason for why engineer is kept alive
+function neural_disconnect.get_disconnect_reason(dummy_engineer)
+    if not dummy_engineer or not dummy_engineer.valid then
+        return "invalid"
+    end
+    
+    local reasons = {}
+    
+    if dummy_engineer.crafting_queue_size > 0 then
+        table.insert(reasons, "crafting")
+    end
+    
+    local main_inventory = dummy_engineer.get_main_inventory()
+    if main_inventory and not main_inventory.is_empty() then
+        table.insert(reasons, "has_items")
+    end
+    
+    local trash_inventory = dummy_engineer.get_inventory(defines.inventory.character_trash)
+    if trash_inventory and not trash_inventory.is_empty() then
+        table.insert(reasons, "has_logistic_items")
+    end
+    
+    if #reasons == 0 then
+        return "none"
+    elseif #reasons == 1 then
+        return reasons[1]
+    else
+        return "multiple"
+    end
+end
+
+-- Mark dummy engineer as orphaned (disconnected but kept alive)
+function neural_disconnect.mark_as_orphaned(dummy_engineer, player_index, vehicle, vehicle_type)
+    if not dummy_engineer or not dummy_engineer.valid then
+        return false
+    end
+    
+    -- Initialize orphaned engineers storage
+    storage.orphaned_dummy_engineers = storage.orphaned_dummy_engineers or {}
+    
+    -- Get disconnect reason
+    local disconnect_reason = neural_disconnect.get_disconnect_reason(dummy_engineer)
+    
+    -- Store orphaned engineer with metadata
+    storage.orphaned_dummy_engineers[dummy_engineer.unit_number] = {
+        entity = dummy_engineer,
+        unit_number = dummy_engineer.unit_number,
+        player_index = player_index,
+        vehicle_id = vehicle and vehicle.valid and vehicle.unit_number or nil,
+        vehicle_type = vehicle_type or "unknown",
+        vehicle_surface = vehicle and vehicle.valid and vehicle.surface.index or nil,
+        disconnected_at = game.tick,
+        disconnect_reason = disconnect_reason
+    }
+    
+    log_debug("Marked engineer #" .. dummy_engineer.unit_number .. " as orphaned (reason: " .. disconnect_reason .. ")")
+    
+    -- Register periodic cleanup handler if not already registered
+    if not storage.orphaned_cleanup_registered then
+        script.on_nth_tick(CLEANUP_INTERVAL_TICKS, function(event)
+            neural_disconnect.cleanup_orphaned_engineers()
+        end)
+        storage.orphaned_cleanup_registered = true
+        log_debug("Registered orphaned engineer cleanup handler")
+    end
+    
+    return true
+end
+
+-- Find orphaned dummy engineer for a vehicle
+function neural_disconnect.find_orphaned_engineer_for_vehicle(vehicle)
+    if not vehicle or not vehicle.valid or not storage.orphaned_dummy_engineers then
+        return nil
+    end
+    
+    local vehicle_id = vehicle.unit_number
+    
+    -- Check if any orphaned engineer is in this vehicle
+    for unit_number, data in pairs(storage.orphaned_dummy_engineers) do
+        local engineer = data.entity
+        if engineer and engineer.valid then
+            -- Check if engineer is in this vehicle
+            if engineer.vehicle == vehicle then
+                return engineer, data
+            end
+            -- Also check by vehicle_id if stored
+            if data.vehicle_id == vehicle_id then
+                return engineer, data
+            end
+        end
+    end
+    
+    return nil
+end
+
+-- Check if vehicle has an active remote connection (any player)
+function neural_disconnect.vehicle_has_active_connection(vehicle)
+    if not vehicle or not vehicle.valid then
+        return false
+    end
+    
+    if storage.neural_spider_control and storage.neural_spider_control.connected_spidertrons then
+        for player_index, connected_vehicle in pairs(storage.neural_spider_control.connected_spidertrons) do
+            if connected_vehicle and connected_vehicle.valid and connected_vehicle == vehicle then
+                return true, player_index
+            end
+        end
+    end
+    
+    return false
+end
+
+-- Force destroy an orphaned engineer (when connecting to different vehicle, interaction, etc.)
+function neural_disconnect.force_destroy_orphaned_engineer(dummy_engineer, player_index, show_message)
+    if not dummy_engineer or not dummy_engineer.valid then
+        return
+    end
+    
+    log_debug("Force destroying orphaned engineer #" .. dummy_engineer.unit_number)
+    
+    -- Cancel crafting
+    neural_disconnect.cancel_crafting_queue(dummy_engineer)
+    
+    -- Get vehicle for transfer
+    local vehicle = nil
+    local vehicle_type = nil
+    local orphaned_data = nil
+    
+    if storage.orphaned_dummy_engineers then
+        orphaned_data = storage.orphaned_dummy_engineers[dummy_engineer.unit_number]
+        if orphaned_data then
+            vehicle_type = orphaned_data.vehicle_type
+            if orphaned_data.vehicle_id then
+                -- Try to find vehicle by ID
+                local surface = orphaned_data.vehicle_surface and game.surfaces[orphaned_data.vehicle_surface] or dummy_engineer.surface
+                if surface and surface.valid then
+                    local entities = surface.find_entities_filtered{type = vehicle_type}
+                    for _, ent in pairs(entities) do
+                        if ent.unit_number == orphaned_data.vehicle_id then
+                            vehicle = ent
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Transfer or spill inventory
+    if vehicle and vehicle.valid then
+        neural_disconnect.transfer_inventory_to_vehicle(dummy_engineer, vehicle, vehicle_type)
+    else
+        neural_disconnect.spill_inventory(dummy_engineer, dummy_engineer.get_main_inventory())
+        local trash_inventory = dummy_engineer.get_inventory(defines.inventory.character_trash)
+        if trash_inventory and not trash_inventory.is_empty() then
+            neural_disconnect.spill_inventory(dummy_engineer, trash_inventory)
+        end
+    end
+    
+    -- Show message if requested
+    if show_message and dummy_engineer.valid then
+        local surface = dummy_engineer.surface
+        for _, player in pairs(game.players) do
+            if player.surface == surface then
+                player.create_local_flying_text{
+                    text = "Remote connected engineer destroyed, items have spilled",
+                    position = dummy_engineer.position,
+                    color = {r=1, g=0.5, b=0}
+                }
+            end
+        end
+    end
+    
+    -- Remove from orphaned list
+    if storage.orphaned_dummy_engineers then
+        storage.orphaned_dummy_engineers[dummy_engineer.unit_number] = nil
+    end
+    
+    -- Destroy the engineer
+    if dummy_engineer.valid then
+        dummy_engineer.destroy()
+    end
+end
+
+-- Periodic cleanup of empty orphaned engineers
+function neural_disconnect.cleanup_orphaned_engineers()
+    if not storage.orphaned_dummy_engineers then
+        return
+    end
+    
+    log_debug("Running periodic cleanup of orphaned engineers")
+    
+    local to_remove = {}
+    
+    for unit_number, data in pairs(storage.orphaned_dummy_engineers) do
+        local engineer = data.entity
+        
+        -- Check if engineer is still valid
+        if not engineer or not engineer.valid then
+            table.insert(to_remove, unit_number)
+            log_debug("Orphaned engineer #" .. unit_number .. " is no longer valid")
+        elseif not neural_disconnect.should_keep_alive(engineer) then
+            -- No longer has items or crafting, destroy it
+            log_debug("Orphaned engineer #" .. unit_number .. " is empty, destroying")
+            neural_disconnect.force_destroy_orphaned_engineer(engineer, data.player_index, false)
+            table.insert(to_remove, unit_number)
+        end
+    end
+    
+    -- Remove processed entries
+    for _, unit_number in ipairs(to_remove) do
+        storage.orphaned_dummy_engineers[unit_number] = nil
+    end
+    
+    -- Unregister handler if no more orphaned engineers
+    if next(storage.orphaned_dummy_engineers) == nil then
+        script.on_nth_tick(CLEANUP_INTERVAL_TICKS, nil)
+        storage.orphaned_cleanup_registered = false
+        storage.orphaned_dummy_engineers = nil
+        log_debug("Unregistered orphaned cleanup handler (no more orphaned engineers)")
+    end
 end
 
 -- Helper functions
@@ -85,8 +347,19 @@ function neural_disconnect.transfer_inventory_to_vehicle(dummy_engineer, vehicle
     local dummy_inventory = dummy_engineer.get_main_inventory()
     local items_spilled = false
     
+    -- Check if there's anything to transfer (main inventory or logistic trash)
+    local has_main_items = not dummy_inventory.is_empty()
+    local has_logistic_items = false
+    
+    -- Check for logistic trash items
+    local trash_inventory = dummy_engineer.get_inventory(defines.inventory.character_trash)
+        if trash_inventory and not trash_inventory.is_empty() then
+            has_logistic_items = true
+            log_debug("Found logistic trash items: " .. trash_inventory.get_item_count() .. " items")
+    end
+    
     -- Exit early if there's nothing to transfer
-    if dummy_inventory.is_empty() then
+    if not has_main_items and not has_logistic_items then
         log_debug("Dummy inventory is empty, nothing to transfer")
         return false
     end
@@ -94,7 +367,12 @@ function neural_disconnect.transfer_inventory_to_vehicle(dummy_engineer, vehicle
     -- Determine if we have a valid destination
     if not (vehicle and vehicle.valid) then
         log_debug("No valid vehicle, spilling all items")
-        neural_disconnect.spill_inventory(dummy_engineer, dummy_inventory)
+        if has_main_items then
+            neural_disconnect.spill_inventory(dummy_engineer, dummy_inventory)
+        end
+        if has_logistic_items and trash_inventory then
+            neural_disconnect.spill_inventory(dummy_engineer, trash_inventory)
+        end
         return true
     end
     
@@ -111,28 +389,56 @@ function neural_disconnect.transfer_inventory_to_vehicle(dummy_engineer, vehicle
     
     if not vehicle_inventory then
         log_debug("Vehicle has no inventory, spilling all items")
-        neural_disconnect.spill_inventory(dummy_engineer, dummy_inventory)
+        if has_main_items then
+            neural_disconnect.spill_inventory(dummy_engineer, dummy_inventory)
+        end
+        if has_logistic_items and trash_inventory then
+            neural_disconnect.spill_inventory(dummy_engineer, trash_inventory)
+        end
         return true
     end
     
-    log_debug("Processing item transfer for " .. dummy_inventory.get_item_count() .. " items")
+    log_debug("Processing item transfer for " .. dummy_inventory.get_item_count() .. " main items" .. 
+              (has_logistic_items and (" and " .. trash_inventory.get_item_count() .. " logistic items") or ""))
     
-    -- Copy inventory contents before we modify it
+    -- Collect all items to transfer (main inventory + logistic trash)
     local items_to_transfer = {}
-    for i = 1, #dummy_inventory do
-        local stack = dummy_inventory[i]
-        if stack and stack.valid_for_read then
-            table.insert(items_to_transfer, {
-                name = stack.name,
-                count = stack.count
-            })
+    
+    -- Copy main inventory contents
+    if has_main_items then
+        for i = 1, #dummy_inventory do
+            local stack = dummy_inventory[i]
+            if stack and stack.valid_for_read then
+                table.insert(items_to_transfer, {
+                    name = stack.name,
+                    count = stack.count
+                })
+            end
+        end
+    end
+    
+    -- Copy logistic trash inventory contents
+    if has_logistic_items and trash_inventory then
+        for i = 1, #trash_inventory do
+            local stack = trash_inventory[i]
+            if stack and stack.valid_for_read then
+                table.insert(items_to_transfer, {
+                    name = stack.name,
+                    count = stack.count
+                })
+            end
         end
     end
 
     log_debug("Found " .. #items_to_transfer .. " items to transfer")
     
-    -- Clear dummy inventory
-    dummy_inventory.clear()
+    -- Clear dummy inventories
+    if has_main_items then
+        dummy_inventory.clear()
+    end
+    if has_logistic_items and trash_inventory then
+        trash_inventory.clear()
+    end
 
     local overflow_items = {}
     
@@ -291,9 +597,36 @@ function neural_disconnect.emergency_disconnect(player, vehicle_destroyed)
         return
     end
 
-    -- Cancel crafting and spill inventory
-    neural_disconnect.cancel_crafting_queue(dummy_engineer)
+    -- Don't cancel crafting or spill immediately - mark as orphaned if should be kept alive
+    local vehicle = nil
+    local vehicle_type = "Vehicle"
+    
+    if storage.neural_spider_control and storage.neural_spider_control.connected_spidertrons then
+        vehicle = storage.neural_spider_control.connected_spidertrons[player.index]
+    end
+    
+    if storage.neural_spider_control and storage.neural_spider_control.vehicle_types then
+        local raw_type = storage.neural_spider_control.vehicle_types[player.index]
+        if raw_type == "spider-vehicle" then
+            vehicle_type = "Spidertron"
+        elseif raw_type == "locomotive" then
+            vehicle_type = "Locomotive"
+        elseif raw_type == "car" then
+            vehicle_type = "Car"
+        end
+    end
+    
+    -- Mark as orphaned if should be kept alive
+    if neural_disconnect.should_keep_alive(dummy_engineer) then
+        neural_disconnect.mark_as_orphaned(dummy_engineer, player.index, vehicle, vehicle_type)
+    else
+        -- Otherwise destroy immediately
     neural_disconnect.spill_inventory(dummy_engineer, dummy_engineer.get_main_inventory())
+        local trash_inventory = dummy_engineer.get_inventory(defines.inventory.character_trash)
+        if trash_inventory and not trash_inventory.is_empty() then
+            neural_disconnect.spill_inventory(dummy_engineer, trash_inventory)
+        end
+    end
 
     -- Find original character and surface
     local original_character
@@ -320,6 +653,20 @@ function neural_disconnect.emergency_disconnect(player, vehicle_destroyed)
     end
     
     if original_character and original_character.valid then
+        -- First, disconnect the player from the dummy engineer
+        player.character = nil
+        
+        -- If keeping engineer alive, ensure it stays in the vehicle
+        if neural_disconnect.should_keep_alive(dummy_engineer) and vehicle and vehicle.valid then
+            -- Make sure dummy engineer is still in the vehicle, put it back if needed
+            if dummy_engineer.valid then
+                if dummy_engineer.vehicle ~= vehicle then
+                    log_debug("Dummy engineer exited vehicle, putting it back in")
+                    vehicle.set_driver(dummy_engineer)
+                end
+            end
+        end
+        
         -- Ensure player is on the original character's surface
         if original_surface and original_surface.valid and player.surface ~= original_surface then
             log_debug("Surface mismatch for player " .. player.name .. ": player on " .. player.surface.name .. ", original character on " .. original_surface.name)
@@ -347,10 +694,7 @@ function neural_disconnect.emergency_disconnect(player, vehicle_destroyed)
         player.print("Error: Original character not found. Please report this issue.", {r=1, g=0, b=0})
     end
 
-    -- Destroy the dummy engineer
-    if dummy_engineer and dummy_engineer.valid then
-        dummy_engineer.destroy()
-    end
+    -- Don't destroy immediately - already handled above (orphaned or destroyed)
     
     -- Clean up data
     neural_disconnect.clean_up_connection_data(player.index)
@@ -392,13 +736,8 @@ function neural_disconnect.return_to_engineer(player, vehicle_type, specific_veh
         return
     end
 
-    -- Cancel any ongoing crafting
-    local crafting_cancelled = neural_disconnect.cancel_crafting_queue(dummy_engineer)
-    if crafting_cancelled then
-        player.print("Crafting queue has been cancelled.", {r=1, g=0.5, b=0})
-    end
-
-    -- Find the vehicle for inventory transfer
+    -- Don't cancel crafting - let it continue if engineer is kept alive
+    -- Find the vehicle for inventory transfer (will be done when engineer is destroyed)
     local vehicle = specific_vehicle
 
     if vehicle and vehicle.valid then
@@ -418,8 +757,10 @@ function neural_disconnect.return_to_engineer(player, vehicle_type, specific_veh
         actual_vehicle_type = storage.neural_spider_control.vehicle_types[player.index]
     end
 
-    -- Transfer inventory or spill if necessary
-    local items_spilled = neural_disconnect.transfer_inventory_to_vehicle(dummy_engineer, vehicle, actual_vehicle_type)
+    -- Mark as orphaned if should be kept alive, otherwise will be destroyed later
+    if neural_disconnect.should_keep_alive(dummy_engineer) then
+        neural_disconnect.mark_as_orphaned(dummy_engineer, player.index, vehicle, actual_vehicle_type)
+    end
 
     -- Find and use the original character
     local original_character
@@ -430,6 +771,17 @@ function neural_disconnect.return_to_engineer(player, vehicle_type, specific_veh
     if original_character and original_character.valid then
         -- First, disconnect the player from the dummy engineer
         player.character = nil
+        
+        -- If keeping engineer alive, ensure it stays in the vehicle
+        if neural_disconnect.should_keep_alive(dummy_engineer) and vehicle and vehicle.valid then
+            -- Make sure dummy engineer is still in the vehicle, put it back if needed
+            if dummy_engineer.valid then
+                if dummy_engineer.vehicle ~= vehicle then
+                    log_debug("Dummy engineer exited vehicle, putting it back in")
+                    vehicle.set_driver(dummy_engineer)
+                end
+            end
+        end
         
         -- Ensure we're operating on the right surface
         local char_surface = original_character.surface
@@ -442,8 +794,11 @@ function neural_disconnect.return_to_engineer(player, vehicle_type, specific_veh
             -- Now it's safe to connect to original character
             player.character = original_character
             
-            local message = items_spilled and "Remote connection disengaged. Some items spilled." or "Remote connection disengaged." 
-            local color = items_spilled and {r=1, g=0.5, b=0} or {r=0, g=1, b=0}
+            local message = "Remote connection disengaged."
+            if neural_disconnect.should_keep_alive(dummy_engineer) then
+                message = message .. " Engineer continues working."
+            end
+            local color = {r=0, g=1, b=0}
             player.create_local_flying_text{
                 text = message,
                 position = player.position,
@@ -457,9 +812,50 @@ function neural_disconnect.return_to_engineer(player, vehicle_type, specific_veh
         log_debug("Original character not found for player " .. player.name)
     end
 
-    -- Destroy the dummy engineer
+    -- Preserve connection info for reconnection before cleaning up
+    if vehicle and vehicle.valid then
+        -- Get vehicle type name for tracking
+        local vehicle_type_name = "spidertron"
+        if actual_vehicle_type == "spider-vehicle" then
+            vehicle_type_name = "spidertron"
+        elseif actual_vehicle_type == "locomotive" then
+            vehicle_type_name = "locomotive"
+        elseif actual_vehicle_type == "car" then
+            vehicle_type_name = "car"
+        end
+        
+        -- Track connection for reconnection (duplicated from neural_connect to avoid circular dependency)
+        -- This tracks the vehicle we just disconnected from, so reconnect will work
+        if not storage.last_connections then
+            storage.last_connections = {}
+        end
+        storage.last_connections[player.index] = {
+            type = vehicle_type_name,
+            vehicle_id = vehicle.unit_number,
+            time = game.tick,
+            surface_index = vehicle.surface.index
+        }
+        log_debug("Tracked disconnected vehicle for reconnection: " .. vehicle_type_name .. " #" .. vehicle.unit_number)
+        
+        -- Update shortcut visibility for reconnect button (will be handled by event handlers)
+    end
+    
+    -- Don't destroy immediately - already marked as orphaned if should be kept alive
+    -- If not kept alive, destroy it now
     if dummy_engineer and dummy_engineer.valid then
+        if not neural_disconnect.should_keep_alive(dummy_engineer) then
+            -- Transfer items before destroying
+            if vehicle and vehicle.valid then
+                neural_disconnect.transfer_inventory_to_vehicle(dummy_engineer, vehicle, actual_vehicle_type)
+            else
+                neural_disconnect.spill_inventory(dummy_engineer, dummy_engineer.get_main_inventory())
+                local trash_inventory = dummy_engineer.get_inventory(defines.inventory.character_trash)
+                if trash_inventory and not trash_inventory.is_empty() then
+                    neural_disconnect.spill_inventory(dummy_engineer, trash_inventory)
+                end
+            end
         dummy_engineer.destroy()
+        end
     end
     
     -- Clean up data
@@ -496,9 +892,12 @@ function neural_disconnect.handle_character_death(player, vehicle_type)
     if dummy_engineer and dummy_engineer.valid then
         log_debug("Valid dummy engineer found for player " .. player.name)
 
-        -- Cancel any ongoing crafting
-        neural_disconnect.cancel_crafting_queue(dummy_engineer)
-
+        -- Mark as orphaned if should be kept alive, otherwise destroy
+        if neural_disconnect.should_keep_alive(dummy_engineer) then
+            neural_disconnect.mark_as_orphaned(dummy_engineer, player_index, connected_vehicle, 
+                                             control_data.vehicle_types[player_index])
+            log_debug("Dummy engineer marked as orphaned for player " .. player.name)
+        else
         -- Transfer items from dummy to vehicle or spill them
         local items_spilled = neural_disconnect.transfer_inventory_to_vehicle(dummy_engineer, connected_vehicle, 
                                                                            control_data.vehicle_types[player_index])
@@ -531,6 +930,7 @@ function neural_disconnect.handle_character_death(player, vehicle_type)
         end
 
         log_debug("Dummy engineer killed for player " .. player.name)
+        end
     else
         log_debug("No valid dummy engineer found for player " .. player.name)
     end

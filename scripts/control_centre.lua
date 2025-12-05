@@ -2,7 +2,7 @@ local neural_connect = require("scripts.neural_connect")
 local neural_disconnect = require("scripts.neural_disconnect")
 
 local function log_debug(message)
-    log("[Neural Control Centre] " .. message)
+    -- Logging disabled
 end
 
 local control_centre = {}

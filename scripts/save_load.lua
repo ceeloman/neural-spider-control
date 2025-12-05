@@ -4,7 +4,7 @@ local save_load = {}
 
 -- Utility function for logging
 local function log_debug(message)
-    log("[Neural Spider Control] " .. message)
+    -- Logging disabled
 end
 
 -- This function should be called before saving the game

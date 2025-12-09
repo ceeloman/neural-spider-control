@@ -1,5 +1,20 @@
 
 ---------------------------------------------------------------------------------------------------
+Version: 2.5.0
+Date: 2025-01-XX
+  Features:
+    - Orphaned dummy engineer system: dummy engineers are kept alive after disconnection if they have items, are crafting, or have active logistic requests
+    - Delayed destruction: dummy engineers are not immediately destroyed on disconnect, allowing crafting to continue and preventing immediate item spillage
+    - Smart reconnection: reconnecting to the same vehicle reuses the existing orphaned dummy engineer instead of creating a new one
+    - GUI integration: added button in vehicle GUI to open the inventory of connected/orphaned dummy engineers
+    - Physical entry handling: when a player physically enters a vehicle with an orphaned dummy engineer, the engineer is automatically destroyed and items are spilled
+    - Periodic cleanup: automatic cleanup of completely idle orphaned engineers (no items, no crafting, no logistic requests) every 15 minutes
+    - Vehicle destruction handling: orphaned engineers are properly cleaned up when their associated vehicle is destroyed
+  Bug fixes:
+    - Fixed reconnection issues where dummy engineer would exit vehicle unnecessarily
+    - Fixed circular dependency issues in module loading
+    - Improved driver seat assignment to ensure player is correctly positioned as driver after reconnection
+---------------------------------------------------------------------------------------------------
 Version: 2.3.0
 Date: 2025-05-08
   Bug fix:

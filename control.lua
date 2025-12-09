@@ -143,6 +143,11 @@ remote.add_interface("neural-spider-control", {
             player_index = params.player_index,
             source_spidertron = params.vehicle
         })
+    end,
+    
+    -- Check if an entity is a dummy engineer
+    is_dummy_engineer = function(entity)
+        return is_dummy_engineer(entity)
     end
 })
 
@@ -207,7 +212,8 @@ function combined_gui_click_handler(event)
        element_name == "close_control_centre" then
         log_debug("Delegating to control_centre")
         control_centre.on_gui_click(event)
-    elseif element_name == "nsc_neural_connect_button" then  -- Changed from "spidertron_neural_connect_button"
+    elseif element_name == "nsc_neural_connect_button" or element_name == "neural-spider-control_neural_connect" or
+           element_name == "nsc_orphaned_engineer_button" or element_name == "neural-spider-control_orphaned_engineer" then
         log_debug("Delegating to spidertron_gui")
         spidertron_gui.on_gui_click(event)
     elseif element_name == "close_neural_control_centre" then
@@ -607,6 +613,8 @@ script.on_event(defines.events.on_gui_opened, function(event)
     spidertron_gui.on_gui_opened(event)
     
     -- Check if player opened an orphaned dummy engineer's inventory directly
+    -- Only destroy if the engineer is truly abandoned (not in a vehicle)
+    -- If the engineer is still in a vehicle, it's being used and should not be destroyed
     if event.gui_type == defines.gui_type.entity and event.entity and event.entity.valid then
         if event.entity.type == "character" then
             local character = event.entity
@@ -616,13 +624,20 @@ script.on_event(defines.events.on_gui_opened, function(event)
             if storage.orphaned_dummy_engineers then
                 for unit_number, data in pairs(storage.orphaned_dummy_engineers) do
                     if data.entity == character then
-                        log_debug("Player " .. player.name .. " interacted with orphaned dummy engineer #" .. unit_number)
-                        -- Force destroy and spill
-                        neural_disconnect.force_destroy_orphaned_engineer(character, data.player_index, true)
-                        player.print("Dummy engineer cleaned up.", {r=1, g=0.5, b=0})
-                        -- Close the GUI since engineer is destroyed
-                        player.opened = nil
-                        return
+                        -- Only destroy if the engineer is not in a vehicle (truly abandoned)
+                        -- If it's still in a vehicle, it's being used and we should allow access
+                        if not character.vehicle or not character.vehicle.valid then
+                            log_debug("Player " .. player.name .. " interacted with abandoned orphaned dummy engineer #" .. unit_number)
+                            -- Force destroy and spill
+                            neural_disconnect.force_destroy_orphaned_engineer(character, data.player_index, true)
+                            player.print("Dummy engineer cleaned up.", {r=1, g=0.5, b=0})
+                            -- Close the GUI since engineer is destroyed
+                            player.opened = nil
+                            return
+                        else
+                            -- Engineer is still in a vehicle, allow normal access
+                            log_debug("Player " .. player.name .. " opened orphaned dummy engineer #" .. unit_number .. " inventory (still in vehicle)")
+                        end
                     end
                 end
             end

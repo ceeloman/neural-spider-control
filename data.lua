@@ -8,7 +8,7 @@ data:extend({
     {
       type = "custom-input",
       name = "reconnect-to-last-vehicle",
-      key_sequence = "CONTROL + Z",
+      key_sequence = "SHIFT + Z",
       consuming = "game-only"
     },
 })

@@ -42,38 +42,6 @@ function save_load.prepare_for_save()
             ::continue::
         end
     end
-    
-    -- Save locomotive connections
-    if global.neural_locomotive_control and global.neural_locomotive_control.dummy_engineers then
-        for player_index, dummy_engineer in pairs(global.neural_locomotive_control.dummy_engineers) do
-            if not dummy_engineer or not dummy_engineer.valid then goto continue end
-            
-            local original_character = global.neural_locomotive_control.original_characters[player_index]
-            local locomotive = global.neural_locomotive_control.connected_locomotives[player_index]
-            local original_surface_index = global.neural_locomotive_control.original_surfaces[player_index]
-            
-            if original_character and original_character.valid and locomotive and locomotive.valid then
-                global.saved_connections[player_index] = {
-                    type = "locomotive",
-                    original_character_id = original_character.unit_number,
-                    original_surface_id = original_surface_index,
-                    vehicle_id = locomotive.unit_number,
-                    dummy_engineer_id = dummy_engineer.unit_number,
-                    original_health = global.neural_locomotive_control.original_health and 
-                                     global.neural_locomotive_control.original_health[player_index],
-                    original_position = {
-                        x = original_character.position.x,
-                        y = original_character.position.y
-                    }
-                }
-                log_debug("Saved locomotive connection for player " .. player_index .. 
-                          " with locomotive ID " .. locomotive.unit_number)
-            end
-            
-            ::continue::
-        end
-    end
-    
     -- Log how many connections we saved
     local count = 0
     for _ in pairs(global.saved_connections) do count = count + 1 end
@@ -91,8 +59,6 @@ local function find_entity_by_unit_number(unit_number, type_filter)
             filter = {type = "character"}
         elseif type_filter == "spidertron" then
             filter = {type = "spider-vehicle"}
-        elseif type_filter == "locomotive" then
-            filter = {type = "locomotive"}
         end
         
         -- Find entities matching our filter
@@ -116,16 +82,13 @@ function save_load.restore_connections()
     
     -- Initialize global tables
     if not global.neural_spider_control then global.neural_spider_control = {} end
-    if not global.neural_locomotive_control then global.neural_locomotive_control = {} end
     
     -- Initialize subtables
-    for _, control in ipairs({global.neural_spider_control, global.neural_locomotive_control}) do
-        for _, table_name in ipairs({
-            "dummy_engineers", "original_characters", "connected_spidertrons", 
-            "connected_locomotives", "original_surfaces", "original_health", "neural_connections"
-        }) do
-            control[table_name] = control[table_name] or {}
-        end
+    for _, table_name in ipairs({
+        "dummy_engineers", "original_characters", "connected_spidertrons", 
+        "original_surfaces", "original_health", "neural_connections"
+    }) do
+        global.neural_spider_control[table_name] = global.neural_spider_control[table_name] or {}
     end
     
     -- Store which players were successfully restored
@@ -142,6 +105,14 @@ function save_load.restore_connections()
         log_debug("Attempting to restore connection for player " .. player.name .. 
                   " (type: " .. connection.type .. ")")
         
+        -- Skip locomotive connections (feature removed)
+        if connection.type == "locomotive" then
+            log_debug("Skipping locomotive connection - feature removed")
+            -- Clean up the saved connection
+            global.saved_connections[player_index] = nil
+            goto continue
+        end
+        
         -- Find the original character by unit number
         local original_character = find_entity_by_unit_number(connection.original_character_id, "character")
         if not original_character then
@@ -151,11 +122,10 @@ function save_load.restore_connections()
             goto continue
         end
         
-        -- Find the vehicle (spidertron or locomotive)
-        local vehicle_type = connection.type == "spidertron" and "spidertron" or "locomotive"
-        local vehicle = find_entity_by_unit_number(connection.vehicle_id, vehicle_type)
+        -- Find the vehicle (spidertron)
+        local vehicle = find_entity_by_unit_number(connection.vehicle_id, "spidertron")
         if not vehicle then
-            log_debug("Couldn't find " .. vehicle_type .. " with unit number " .. 
+            log_debug("Couldn't find spidertron with unit number " .. 
                       (connection.vehicle_id or "nil") .. 
                       " for player " .. player.name)
             goto continue
@@ -164,15 +134,12 @@ function save_load.restore_connections()
         -- Determine if the player is already in control of a dummy engineer in the vehicle
         local in_vehicle_control = false
         if player.character and player.vehicle == vehicle then
-            log_debug("Player " .. player.name .. " is already in " .. vehicle_type .. 
-                      " control, updating references")
+            log_debug("Player " .. player.name .. " is already in spidertron control, updating references")
             in_vehicle_control = true
         end
         
-        -- Determine which control structure to use
-        local control_data = connection.type == "spidertron" and 
-                             global.neural_spider_control or 
-                             global.neural_locomotive_control
+        -- Use neural_spider_control
+        local control_data = global.neural_spider_control
         
         -- Store the original character info
         control_data.original_characters[player_index] = original_character
@@ -182,32 +149,23 @@ function save_load.restore_connections()
         end
         
         -- Store the vehicle connection
-        if connection.type == "spidertron" then
-            control_data.connected_spidertrons[player_index] = vehicle
-        else
-            control_data.connected_locomotives[player_index] = vehicle
-        end
+        control_data.connected_spidertrons[player_index] = vehicle
         
         -- If player is in vehicle control mode, update dummy engineer reference
         if in_vehicle_control then
-            if connection.type == "spidertron" then
-                control_data.dummy_engineers[player_index] = {
-                    entity = player.character,
-                    unit_number = player.character.unit_number
-                }
-            else
-                control_data.dummy_engineers[player_index] = player.character
-            end
+            control_data.dummy_engineers[player_index] = {
+                entity = player.character,
+                unit_number = player.character.unit_number
+            }
             
             -- Restart health monitoring
             local neural_connect = require("scripts.neural_connect")
             neural_connect.start_health_monitor(player)
             
             table.insert(restored_players, player_index)
-            log_debug("Successfully restored " .. vehicle_type .. " connection for player " .. player.name)
+            log_debug("Successfully restored spidertron connection for player " .. player.name)
         else
-            log_debug("Player " .. player.name .. " is not in " .. vehicle_type .. 
-                      " control, partial restoration only")
+            log_debug("Player " .. player.name .. " is not in spidertron control, partial restoration only")
         end
         
         ::continue::

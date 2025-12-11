@@ -296,6 +296,15 @@ function neural_disconnect.cancel_crafting_queue(dummy_engineer)
     return false
 end
 
+-- Helper function to safely get optional stack properties
+local function safe_get_property(stack, property_name, getter_func)
+    local ok, value = pcall(getter_func)
+    if ok then
+        return value
+    end
+    return nil
+end
+
 -- Spill the contents of an inventory onto the ground
 function neural_disconnect.spill_inventory(entity, inventory)
     if not inventory or inventory.is_empty() then return end
@@ -303,28 +312,48 @@ function neural_disconnect.spill_inventory(entity, inventory)
     log_debug("Spilling inventory with " .. inventory.get_item_count() .. " total items")
     
     -- Get all items from inventory before clearing it
-    -- Duplicate stack objects to preserve quality (userdata) before clearing inventory
+    -- Extract item data to preserve information before clearing inventory
     local items_to_spill = {}
     for i = 1, #inventory do
         local stack = inventory[i]
         if stack and stack.valid_for_read then
-            -- Duplicate the stack to preserve quality and make it independent of the inventory slot
-            local duplicated_stack = stack.duplicate()
-            table.insert(items_to_spill, duplicated_stack)
+            -- Extract item data from the stack
+            local item_data = {
+                name = stack.name,
+                count = stack.count
+            }
+            -- Preserve additional properties if they exist (use safe_get_property to avoid errors)
+            local health = safe_get_property(stack, "health", function() return stack.health end)
+            if health and health < 1 then
+                item_data.health = health
+            end
+            local durability = safe_get_property(stack, "durability", function() return stack.durability end)
+            if durability and durability < 1 then
+                item_data.durability = durability
+            end
+            local ammo = safe_get_property(stack, "ammo", function() return stack.ammo end)
+            if ammo and ammo > 0 then
+                item_data.ammo = ammo
+            end
+            local tags = safe_get_property(stack, "tags", function() return stack.tags end)
+            if tags then
+                item_data.tags = tags
+            end
+            table.insert(items_to_spill, item_data)
         end
     end
     
-    -- Clear the inventory first to avoid duplication (safe now since we've duplicated the stacks)
+    -- Clear the inventory first (safe now since we've extracted the item data)
     inventory.clear()
     
-    -- Then spill each item using duplicated stack objects to preserve quality
-    for _, stack in ipairs(items_to_spill) do
+    -- Then spill each item using extracted item data
+    for _, item_data in ipairs(items_to_spill) do
         pcall(function()
-            -- Use duplicated stack object directly to preserve quality information
+            -- Use extracted item data to create item-on-ground entity
             entity.surface.create_entity{
                 name = "item-on-ground",
                 position = entity.position,
-                stack = stack
+                stack = item_data
             }
         end)
     end
@@ -381,8 +410,6 @@ function neural_disconnect.transfer_inventory_to_vehicle(dummy_engineer, vehicle
     
     if vehicle.type == "spider-vehicle" then
         vehicle_inventory = vehicle.get_inventory(defines.inventory.spider_trunk)
-    elseif vehicle.type == "locomotive" then
-        vehicle_inventory = vehicle.get_inventory(defines.inventory.cargo_wagon)
     elseif vehicle.type == "car" then
         vehicle_inventory = vehicle.get_inventory(defines.inventory.car_trunk)
     end
@@ -607,8 +634,6 @@ function neural_disconnect.emergency_disconnect(player, vehicle_destroyed)
         local raw_type = storage.neural_spider_control.vehicle_types[player.index]
         if raw_type == "spider-vehicle" then
             vehicle_type = "Spidertron"
-        elseif raw_type == "locomotive" then
-            vehicle_type = "Locomotive"
         elseif raw_type == "car" then
             vehicle_type = "Car"
         end
@@ -642,8 +667,6 @@ function neural_disconnect.emergency_disconnect(player, vehicle_destroyed)
             local raw_type = storage.neural_spider_control.vehicle_types[player.index]
             if raw_type == "spider-vehicle" then
                 vehicle_type = "Spidertron"
-            elseif raw_type == "locomotive" then
-                vehicle_type = "Locomotive"
             elseif raw_type == "car" then
                 vehicle_type = "Car"
             end
@@ -816,8 +839,6 @@ function neural_disconnect.return_to_engineer(player, vehicle_type, specific_veh
         local vehicle_type_name = "spidertron"
         if actual_vehicle_type == "spider-vehicle" then
             vehicle_type_name = "spidertron"
-        elseif actual_vehicle_type == "locomotive" then
-            vehicle_type_name = "locomotive"
         elseif actual_vehicle_type == "car" then
             vehicle_type_name = "car"
         end

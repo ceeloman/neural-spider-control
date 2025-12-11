@@ -11,6 +11,12 @@ data:extend({
       key_sequence = "CONTROL + Z",
       consuming = "game-only"
     },
+    {
+      type = "custom-input",
+      name = "neural-connect-remote",
+      key_sequence = "ALT + H",
+      consuming = "game-only"
+    },
 })
 
 data:extend({

@@ -65,8 +65,6 @@ function neural_connect.reconnect_to_last_vehicle(player_index)
             local entity_type
             if last_connection.type == "spidertron" then
                 entity_type = "spider-vehicle"
-            elseif last_connection.type == "locomotive" then
-                entity_type = "locomotive"
             elseif last_connection.type == "car" then
                 entity_type = "car"
             else
@@ -109,8 +107,6 @@ function neural_connect.reconnect_to_last_vehicle(player_index)
     
     -- Reconnect based on vehicle type
     if vehicle.type == "spider-vehicle" then
-        neural_connect.connect_to_spidertron({player_index = player_index, spidertron = vehicle})
-    elseif vehicle.type == "locomotive" then
         neural_connect.connect_to_spidertron({player_index = player_index, spidertron = vehicle})
     elseif vehicle.type == "car" then
         neural_connect.connect_to_spidertron({player_index = player_index, spidertron = vehicle})
@@ -179,14 +175,12 @@ local function clean_up_connection_data(player_index)
                 "original_characters", 
                 "dummy_engineers", 
                 "connected_spidertrons", 
-                "connected_locomotives", 
                 "original_health", 
                 "original_surfaces", 
                 "neural_connections",
                 "original_character_ids",
                 "dummy_engineer_ids",
-                "connected_spidertron_ids",
-                "connected_locomotive_ids"
+                "connected_spidertron_ids"
             }) do
                 if control_data[table_name] then
                     control_data[table_name][player_index] = nil
@@ -227,9 +221,7 @@ end)
 function neural_connect.handle_player_entered_vehicle(player, vehicle)
     log_debug(string.format("Player %s entered a vehicle: %s", player.name, vehicle.name))
 
-    if vehicle.type == "locomotive" then
-        neural_connect.handle_locomotive_entry(player, vehicle)
-    elseif vehicle.type == "car" then
+    if vehicle.type == "car" then
         neural_connect.handle_car_entry(player, vehicle)
     elseif is_restricted_spider_vehicle(vehicle) then
         neural_connect.handle_restricted_spider_entry(player, vehicle)
@@ -244,18 +236,7 @@ function neural_connect.handle_player_exited_vehicle(player, vehicle)
     end
 end
 
-function neural_connect.handle_locomotive_entry(player, locomotive)
-    if space_elevator_compatibility then
-        if space_elevator_compatibility.is_near_space_elevator(locomotive) or (storage.locomotives_near_elevators and storage.locomotives_near_elevators[locomotive.unit_number]) then
-            neural_connect.handle_locomotive_near_elevator(player, locomotive)
-        end
-    else
-        neural_connect.connect_to_spidertron({player_index = player.index, spidertron = locomotive})
-    end
-end
-
 function neural_connect.handle_car_entry(player, car)
-    -- Similar to locomotive entry but for cars
     neural_connect.connect_to_spidertron({player_index = player.index, spidertron = car})
 end
 
@@ -268,17 +249,6 @@ function neural_connect.handle_restricted_spider_entry(player, vehicle)
         log_debug(string.format("Player %s prevented from entering restricted spider vehicle: %s", player.name, vehicle.name))
     else
         log_debug(string.format("Dummy engineer allowed to enter restricted spider vehicle: %s", vehicle.name))
-    end
-end
-
-function neural_connect.handle_locomotive_near_elevator(player, locomotive)
-    local is_dummy_engineer = storage.neural_spider_control and
-                              storage.neural_spider_control.dummy_engineers and
-                              storage.neural_spider_control.dummy_engineers[player.index] == player.character
-
-    if is_dummy_engineer then
-        player.print("Cannot establish Remote connection near Space Elevator.", {r=1, g=0.5, b=0})
-        neural_disconnect.disconnect_from_spidertron({player_index = player.index})
     end
 end
 
@@ -354,15 +324,24 @@ function neural_connect.connect_to_spidertron(command)
         is_orphaned = true
         orphaned_data = orphaned_data_check
     -- If no orphaned engineer, check if current driver is a dummy engineer (active connection or old data)
-    elseif current_driver and current_driver.valid and current_driver.type == "character" then
-        -- Check if it's in our dummy engineers storage (active connection)
-        if storage.neural_spider_control and storage.neural_spider_control.dummy_engineers then
-            for player_idx, dummy_data in pairs(storage.neural_spider_control.dummy_engineers) do
-                local dummy_entity = type(dummy_data) == "table" and dummy_data.entity or dummy_data
-                if dummy_entity == current_driver then
-                    dummy_engineer_to_reuse = current_driver
-                    log_debug("Found active dummy engineer #" .. current_driver.unit_number .. " in vehicle (player " .. player_idx .. ")")
-                    break
+    elseif current_driver and current_driver.valid then
+        -- Safely check if current_driver is a character entity (has type property)
+        local driver_type = nil
+        local success, result = pcall(function() return current_driver.type end)
+        if success then
+            driver_type = result
+        end
+        
+        if driver_type == "character" then
+            -- Check if it's in our dummy engineers storage (active connection)
+            if storage.neural_spider_control and storage.neural_spider_control.dummy_engineers then
+                for player_idx, dummy_data in pairs(storage.neural_spider_control.dummy_engineers) do
+                    local dummy_entity = type(dummy_data) == "table" and dummy_data.entity or dummy_data
+                    if dummy_entity == current_driver then
+                        dummy_engineer_to_reuse = current_driver
+                        log_debug("Found active dummy engineer #" .. current_driver.unit_number .. " in vehicle (player " .. player_idx .. ")")
+                        break
+                    end
                 end
             end
         end
@@ -450,8 +429,6 @@ function neural_connect.connect_to_spidertron(command)
         local vehicle_type_name = "Vehicle"
         if vehicle_type == "spider-vehicle" then
             vehicle_type_name = "Spidertron"
-        elseif vehicle_type == "locomotive" then
-            vehicle_type_name = "Locomotive"
         elseif vehicle_type == "car" then
             vehicle_type_name = "Car"
         end
@@ -638,8 +615,6 @@ function neural_connect.connect_to_spidertron(command)
     local vehicle_type_name = "Vehicle"
     if vehicle_type == "spider-vehicle" then
         vehicle_type_name = "Spidertron"
-    elseif vehicle_type == "locomotive" then
-        vehicle_type_name = "Locomotive"
     elseif vehicle_type == "car" then
         vehicle_type_name = "Car"
     end
@@ -666,7 +641,7 @@ function neural_connect.on_vehicle_destroyed(event)
     if not entity or not entity.valid then return end
     
     -- Check for any vehicle types we care about
-    if entity.type == "spider-vehicle" or entity.type == "locomotive" or entity.type == "car" then
+    if entity.type == "spider-vehicle" or entity.type == "car" then
         -- Check for active connections
         if storage.neural_spider_control and storage.neural_spider_control.connected_spidertrons then
             for player_index, connected_vehicle in pairs(storage.neural_spider_control.connected_spidertrons) do

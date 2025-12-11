@@ -174,11 +174,6 @@ function control_centre.on_gui_click(event)
                storage.neural_spider_control.connected_spidertrons[player.index] then
                 log_debug("Found spidertron connection for player " .. player.name)
                 neural_disconnect.disconnect_from_spidertron({player_index = player.index})
-            elseif storage.neural_locomotive_control and 
-                   storage.neural_locomotive_control.connected_locomotives and 
-                   storage.neural_locomotive_control.connected_locomotives[player.index] then
-                log_debug("Found locomotive connection for player " .. player.name)
-                neural_disconnect.disconnect_from_locomotive({player_index = player.index})
             else
                 log_debug("No neural connection found for player " .. player.name)
                 player.print("No active neural connection.")

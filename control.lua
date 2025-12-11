@@ -83,13 +83,61 @@ local function init_globals()
     storage.neural_spider_control.original_character_ids = storage.neural_spider_control.original_character_ids or {}
     storage.neural_spider_control.dummy_engineer_ids = storage.neural_spider_control.dummy_engineer_ids or {}
     
-    -- Space Exploration compatibility
-    if space_elevator_compatibility then
-        storage.locomotives_near_elevators = storage.locomotives_near_elevators or {}
-    end
     
     -- Health check functions
     storage.health_check_functions = storage.health_check_functions or {}
+end
+
+-- Migration function to clean up locomotive connections (removed feature)
+local function migrate_remove_locomotives()
+    log_debug("Migrating: Removing locomotive connections")
+    
+    -- Disconnect any active locomotive connections
+    if storage.neural_spider_control and storage.neural_spider_control.connected_spidertrons then
+        for player_index, vehicle in pairs(storage.neural_spider_control.connected_spidertrons) do
+            if vehicle and vehicle.valid and vehicle.type == "locomotive" then
+                local player = game.get_player(player_index)
+                if player and player.valid then
+                    log_debug("Disconnecting locomotive connection for player " .. player.name)
+                    neural_disconnect.disconnect_from_spidertron({player_index = player_index})
+                    player.print("Locomotive neural connection removed - feature discontinued (use in-game remote driving).", {r=1, g=0.5, b=0})
+                end
+            end
+        end
+    end
+    
+    -- Clean up locomotive data from global storage
+    if global and global.neural_locomotive_control then
+        log_debug("Cleaning up global.neural_locomotive_control")
+        global.neural_locomotive_control = nil
+    end
+    
+    -- Clean up locomotive data from storage
+    if storage and storage.neural_locomotive_control then
+        log_debug("Cleaning up storage.neural_locomotive_control")
+        storage.neural_locomotive_control = nil
+    end
+    
+    -- Clean up locomotive connections from saved_connections
+    if global and global.saved_connections then
+        local cleaned = false
+        for player_index, connection in pairs(global.saved_connections) do
+            if connection.type == "locomotive" then
+                global.saved_connections[player_index] = nil
+                cleaned = true
+            end
+        end
+        if cleaned then
+            log_debug("Cleaned locomotive connections from saved_connections")
+        end
+    end
+    
+    -- Clean up locomotives_near_elevators (Space Exploration compatibility)
+    if storage and storage.locomotives_near_elevators then
+        storage.locomotives_near_elevators = nil
+    end
+    
+    log_debug("Locomotive migration complete")
 end
 
 -- Clean up storage data for a player
@@ -148,34 +196,146 @@ remote.add_interface("neural-spider-control", {
     -- Check if an entity is a dummy engineer
     is_dummy_engineer = function(entity)
         return is_dummy_engineer(entity)
-    end
-})
-
--- Check if locomotives are near space elevators (for Space Exploration mod)
-local function check_locomotives()
-    if space_elevator_compatibility then
-        if not storage.neural_spider_control or not storage.neural_spider_control.connected_spidertrons then
-            return
+    end,
+    
+    -- Get neural connection data - shows all orphaned dummy engineers
+    get_connections = function(player_index)
+        -- log("[NSC] get_connections called for player_index: " .. tostring(player_index))
+        local result = {
+            active = {},
+            orphaned = {}
+        }
+        
+        if not storage or not storage.neural_spider_control then
+            -- log("[NSC]   storage or storage.neural_spider_control is nil")
+            return result
         end
-
-        storage.locomotives_near_elevators = storage.locomotives_near_elevators or {}
-
-        for player_index, vehicle in pairs(storage.neural_spider_control.connected_spidertrons) do
-            if vehicle and vehicle.valid and vehicle.type == "locomotive" then
-                if space_elevator_compatibility.is_near_space_elevator(vehicle) then
-                    local player = game.get_player(player_index)
-                    if player and player.valid then
-                        neural_disconnect.disconnect_from_spidertron({player_index = player_index})
-                        player.print("Space Elevator interference detected: neural link disengaged.", {r=1, g=0.5, b=0})
+        
+        -- log("[NSC]   storage.neural_spider_control exists")
+        local control_data = storage.neural_spider_control
+        
+        -- Get active connections (player's own connection if they have one)
+        if control_data.dummy_engineers and control_data.connected_spidertrons then
+            -- log("[NSC]   Checking for active connection...")
+            local dummy_data = control_data.dummy_engineers[player_index]
+            if dummy_data then
+                -- log("[NSC]     Found dummy_data for player " .. player_index)
+                local dummy_engineer = type(dummy_data) == "table" and dummy_data.entity or dummy_data
+                local connected_vehicle = control_data.connected_spidertrons[player_index]
+                
+                if dummy_engineer and dummy_engineer.valid and connected_vehicle and connected_vehicle.valid then
+                    -- log("[NSC]     Adding active connection: engineer=" .. dummy_engineer.unit_number .. ", vehicle=" .. connected_vehicle.unit_number)
+                    table.insert(result.active, {
+                        player_index = player_index,
+                        engineer_unit_number = dummy_engineer.unit_number,
+                        vehicle_unit_number = connected_vehicle.unit_number,
+                        vehicle_surface_index = connected_vehicle.surface.index,
+                        vehicle_name = connected_vehicle.name
+                    })
+                -- else
+                    -- log("[NSC]     Engineer or vehicle invalid")
+                end
+            -- else
+                -- log("[NSC]     No dummy_data for player " .. player_index)
+            end
+        -- else
+            -- log("[NSC]   dummy_engineers or connected_spidertrons doesn't exist")
+        end
+        
+        -- Get ALL orphaned dummy engineers (no filtering)
+        -- log("[NSC]   Checking for orphaned dummy engineers...")
+        if storage.orphaned_dummy_engineers then
+            -- log("[NSC]     storage.orphaned_dummy_engineers exists")
+            local count = 0
+            for engineer_unit_number, orphaned_data in pairs(storage.orphaned_dummy_engineers) do
+                count = count + 1
+                -- log("[NSC]     Processing orphaned entry #" .. count .. " (unit_number: " .. tostring(engineer_unit_number) .. ")")
+                local engineer = orphaned_data.entity
+                -- log("[NSC]       engineer exists: " .. tostring(engineer ~= nil))
+                if engineer then
+                    -- log("[NSC]       engineer.valid: " .. tostring(engineer.valid))
+                    if engineer.valid then
+                        -- Can't pass entity references through remote interface, but we have the data
+                        table.insert(result.orphaned, {
+                            engineer_unit_number = engineer_unit_number,
+                            engineer_surface_index = engineer.surface.index,
+                            engineer_surface_name = engineer.surface.name,
+                            player_index = orphaned_data.player_index,
+                            vehicle_id = orphaned_data.vehicle_id,
+                            vehicle_surface = orphaned_data.vehicle_surface,
+                            vehicle_type = orphaned_data.vehicle_type,
+                            disconnected_at = orphaned_data.disconnected_at,
+                            disconnect_reason = orphaned_data.disconnect_reason
+                        })
+                    -- else
+                        -- log("[NSC]       Engineer is not valid, skipping")
                     end
-                    storage.locomotives_near_elevators[vehicle.unit_number] = true
-                else
-                    storage.locomotives_near_elevators[vehicle.unit_number] = nil
+                -- else
+                    -- log("[NSC]       Engineer is nil, skipping")
+                end
+            end
+            -- log("[NSC]     Processed " .. count .. " orphaned entries, added " .. #result.orphaned .. " to result")
+        -- else
+            -- log("[NSC]     storage.orphaned_dummy_engineers does not exist")
+        end
+        
+        -- log("[NSC]   Returning result: " .. #result.active .. " active, " .. #result.orphaned .. " orphaned")
+        return result
+    end,
+    
+    -- Get all connections (for admins)
+    get_all_connections = function()
+        local result = {
+            active = {},
+            orphaned = {}
+        }
+        
+        if not storage or not storage.neural_spider_control then
+            return result
+        end
+        
+        local control_data = storage.neural_spider_control
+        
+        -- Get all active connections
+        if control_data.dummy_engineers and control_data.connected_spidertrons then
+            for player_index, dummy_data in pairs(control_data.dummy_engineers) do
+                local dummy_engineer = type(dummy_data) == "table" and dummy_data.entity or dummy_data
+                local connected_vehicle = control_data.connected_spidertrons[player_index]
+                
+                if dummy_engineer and dummy_engineer.valid and connected_vehicle and connected_vehicle.valid then
+                    table.insert(result.active, {
+                        player_index = player_index,
+                        engineer_unit_number = dummy_engineer.unit_number,
+                        vehicle_unit_number = connected_vehicle.unit_number,
+                        vehicle_surface_index = connected_vehicle.surface.index,
+                        vehicle_name = connected_vehicle.name
+                    })
                 end
             end
         end
+        
+        -- Get all orphaned connections
+        if storage.orphaned_dummy_engineers then
+            for engineer_unit_number, orphaned_data in pairs(storage.orphaned_dummy_engineers) do
+                local engineer = orphaned_data.entity
+                if engineer and engineer.valid then
+                    table.insert(result.orphaned, {
+                        engineer_unit_number = engineer_unit_number,
+                        player_index = orphaned_data.player_index,
+                        vehicle_id = orphaned_data.vehicle_id,
+                        vehicle_surface = orphaned_data.vehicle_surface,
+                        vehicle_type = orphaned_data.vehicle_type,
+                        disconnected_at = orphaned_data.disconnected_at,
+                        disconnect_reason = orphaned_data.disconnect_reason
+                    })
+                end
+            end
+        end
+        
+        return result
     end
-end
+})
+
 
 -- Register the GUI handlers
 function register_gui_handlers()
@@ -347,14 +507,6 @@ function find_entity_by_unit_number(unit_number)
             end
         end
         
-        -- Try to find a locomotive
-        local locomotives = surface.find_entities_filtered{type = "locomotive"}
-        for _, locomotive in pairs(locomotives) do
-            if locomotive.unit_number == unit_number then
-                return locomotive
-            end
-        end
-        
         -- Try to find a car
         local cars = surface.find_entities_filtered{type = "car"}
         for _, car in pairs(cars) do
@@ -369,9 +521,9 @@ end
 
 -- Function to restore entity references from unit numbers after loading
 function restore_entity_references()
-    log_debug("Starting entity reference restoration")
+    -- log_debug("Starting entity reference restoration")
     
-    if not storage then 
+    if not storage then
         log_debug("ERROR: storage table not available")
         return
     end
@@ -449,8 +601,6 @@ function restore_entity_references()
                     local vehicle_type_name = "spidertron"
                     if vehicle_type == "spider-vehicle" then
                         vehicle_type_name = "spidertron"
-                    elseif vehicle_type == "locomotive" then
-                        vehicle_type_name = "locomotive"
                     elseif vehicle_type == "car" then
                         vehicle_type_name = "car"
                     end
@@ -526,16 +676,6 @@ local function register_with_vehicle_control_centre()
     })
     
     -- Register buttons for other vehicle types if those features are enabled
-
-    remote.call("vehicle-control-centre", "register_button", "neural-spidertron-control", {
-        action = "neural_connect_locomotive",
-        vehicle_type = "locomotive",
-        sprite = "neural-connection-sprite", 
-        tooltip = {"neural-locomotive-gui.connect"},
-        priority = 10,
-        callback = "neural-spidertron-control.connect_vehicle"
-    })
-
     remote.call("vehicle-control-centre", "register_button", "neural-spidertron-control", {
         action = "neural_connect_car",
         vehicle_type = "car",
@@ -574,6 +714,9 @@ end)
 script.on_configuration_changed(function(data)
     log_debug("Configuration changed, updating storage data")
     init_globals()
+    
+    -- Migrate: Remove locomotive connections
+    migrate_remove_locomotives()
 
     if remote.interfaces["vehicle-control-centre"] then
         use_control_centre = true
@@ -721,18 +864,7 @@ script.on_event(defines.events.on_player_driving_changed_state, function(event)
             end
         end
         
-        if vehicle.type == "locomotive" then
-            if space_elevator_compatibility and (
-                space_elevator_compatibility.is_near_space_elevator(vehicle) or 
-                (storage.locomotives_near_elevators and storage.locomotives_near_elevators[vehicle.unit_number])
-            ) then
-                -- Handle Space Elevator restrictions
-                if is_dummy_engineer(player.character) then
-                    player.print("Cannot establish neural link near Space Elevator.", {r=1, g=0.5, b=0})
-                    neural_disconnect.disconnect_from_spidertron({player_index = player.index})
-                end
-            end
-        elseif is_restricted_spider_vehicle(vehicle) then
+        if is_restricted_spider_vehicle(vehicle) then
             log_debug(string.format("WARNING: %s attempted to enter restricted spider vehicle: %s", player.name, vehicle.name))
             
             if not is_dummy_engineer(player.character) then
@@ -795,7 +927,7 @@ script.on_event(defines.events.on_entity_died, function(event)
     if entity.type == "character" then
         log_debug("Character died: " .. entity.unit_number)
         neural_connect.check_original_engineer_death(event)
-    elseif entity.type == "spider-vehicle" or entity.type == "locomotive" or entity.type == "car" then
+    elseif entity.type == "spider-vehicle" or entity.type == "car" then
         log_debug(entity.type .. " died: " .. entity.unit_number)
         neural_connect.on_vehicle_destroyed(event)
     end
@@ -809,8 +941,8 @@ commands.add_command("neural_debug", "Show neural connection debug info", functi
     local player = game.get_player(command.player_index)
     
     -- Log intro
-    log_debug("=== Neural Control Debug Info ===")
-    log_debug("Requested by player: " .. player.name)
+    -- log_debug("=== Neural Control Debug Info ===")
+    -- log_debug("Requested by player: " .. player.name)
     
     -- Check if storage exists
     if not storage then
@@ -903,7 +1035,7 @@ commands.add_command("neural_debug", "Show neural connection debug info", functi
     
     -- Print summary to player
     --player.print("Neural connection debug info written to log")
-    log_debug("=== End Neural Control Debug Info ===")
+    -- log_debug("=== End Neural Control Debug Info ===")
 end)
 
 -- GUI event handlers

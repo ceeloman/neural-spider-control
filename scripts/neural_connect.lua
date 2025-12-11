@@ -266,6 +266,14 @@ function neural_connect.connect_to_spidertron(command)
     local player = game.get_player(command.player_index)
     local vehicle = command.spidertron
     
+    -- Validate vehicle is valid
+    if not vehicle or not vehicle.valid then
+        if player then
+            player.print("Unable to connect. Vehicle is invalid or has been destroyed.", {r=1, g=0.5, b=0})
+        end
+        return
+    end
+    
     -- Determine the vehicle type
     local vehicle_type = vehicle.type
     
@@ -355,8 +363,10 @@ function neural_connect.connect_to_spidertron(command)
         if storage.neural_spider_control and storage.neural_spider_control.dummy_engineers and 
            storage.neural_spider_control.dummy_engineers[player.index] then
             local source_vehicle = storage.neural_spider_control.connected_spidertrons[player.index]
-            if source_vehicle then
+            if source_vehicle and source_vehicle.valid then
                 log_debug("Disconnecting from source vehicle #" .. source_vehicle.unit_number)
+            elseif source_vehicle then
+                log_debug("Disconnecting from invalid source vehicle (was destroyed)")
             end
             neural_disconnect.disconnect_from_spidertron({
                 player_index = player.index,
@@ -479,8 +489,10 @@ function neural_connect.connect_to_spidertron(command)
         -- Store the current vehicle BEFORE disconnecting
         local source_vehicle = storage.neural_spider_control.connected_spidertrons[player.index]
         
-        if source_vehicle then
+        if source_vehicle and source_vehicle.valid then
             log_debug("Disconnecting from source vehicle #" .. source_vehicle.unit_number)
+        elseif source_vehicle then
+            log_debug("Disconnecting from invalid source vehicle (was destroyed)")
         else
             log_debug("Disconnecting but no source vehicle found")
         end
@@ -661,17 +673,32 @@ function neural_connect.on_vehicle_destroyed(event)
             local to_remove = {}
             
             for unit_number, data in pairs(storage.orphaned_dummy_engineers) do
+                local engineer = data.entity
+                local should_cleanup = false
+                
+                -- Primary check: engineer was associated with this vehicle by vehicle_id
                 if data.vehicle_id == vehicle_id then
-                    local engineer = data.entity
+                    should_cleanup = true
+                -- Fallback: check if engineer is currently in the destroyed vehicle
+                -- (This catches cases where vehicle_id wasn't set properly)
+                elseif engineer and engineer.valid and engineer.vehicle == entity then
+                    should_cleanup = true
+                end
+                
+                if should_cleanup then
                     if engineer and engineer.valid then
                         log_debug("Vehicle destroyed, cleaning up orphaned engineer #" .. unit_number)
+                        -- force_destroy_orphaned_engineer will remove it from storage, so we don't need to do it here
                         neural_disconnect.force_destroy_orphaned_engineer(engineer, data.player_index, false)
+                    else
+                        -- Engineer is invalid but still in storage, just remove it
+                        log_debug("Vehicle destroyed, removing invalid orphaned engineer #" .. unit_number .. " from storage")
                         table.insert(to_remove, unit_number)
                     end
                 end
             end
             
-            -- Remove from storage
+            -- Remove invalid engineers from storage (valid ones are already removed by force_destroy_orphaned_engineer)
             for _, unit_number in ipairs(to_remove) do
                 storage.orphaned_dummy_engineers[unit_number] = nil
             end

@@ -195,7 +195,7 @@ function neural_disconnect.force_destroy_orphaned_engineer(dummy_engineer, playe
     
     -- Transfer or spill inventory
     if vehicle and vehicle.valid then
-        neural_disconnect.transfer_inventory_to_vehicle(dummy_engineer, vehicle, vehicle_type)
+        neural_disconnect.transfer_inventory_to_vehicle(dummy_engineer, vehicle, vehicle_type, player_index)
     else
         neural_disconnect.spill_inventory(dummy_engineer, dummy_engineer.get_main_inventory())
         local trash_inventory = dummy_engineer.get_inventory(defines.inventory.character_trash)
@@ -306,63 +306,34 @@ local function safe_get_property(stack, property_name, getter_func)
 end
 
 -- Spill the contents of an inventory onto the ground
+-- Uses built-in surface.spill_inventory() which automatically preserves quality
 function neural_disconnect.spill_inventory(entity, inventory)
     if not inventory or inventory.is_empty() then return end
     
     log_debug("Spilling inventory with " .. inventory.get_item_count() .. " total items")
     
-    -- Get all items from inventory before clearing it
-    -- Extract item data to preserve information before clearing inventory
-    local items_to_spill = {}
-    for i = 1, #inventory do
-        local stack = inventory[i]
-        if stack and stack.valid_for_read then
-            -- Extract item data from the stack
-            local item_data = {
-                name = stack.name,
-                count = stack.count
-            }
-            -- Preserve additional properties if they exist (use safe_get_property to avoid errors)
-            local health = safe_get_property(stack, "health", function() return stack.health end)
-            if health and health < 1 then
-                item_data.health = health
-            end
-            local durability = safe_get_property(stack, "durability", function() return stack.durability end)
-            if durability and durability < 1 then
-                item_data.durability = durability
-            end
-            local ammo = safe_get_property(stack, "ammo", function() return stack.ammo end)
-            if ammo and ammo > 0 then
-                item_data.ammo = ammo
-            end
-            local tags = safe_get_property(stack, "tags", function() return stack.tags end)
-            if tags then
-                item_data.tags = tags
-            end
-            table.insert(items_to_spill, item_data)
-        end
+    -- Use built-in spill_inventory which automatically preserves quality
+    local success, result = pcall(function()
+        return entity.surface.spill_inventory{
+            position = entity.position,
+            inventory = inventory,
+            enable_looted = false,
+            allow_belts = true,
+            drop_full_stack = false
+        }
+    end)
+    
+    if not success then
+        game.print("[Spill] ERROR: Failed to spill inventory: " .. tostring(result))
+        log_debug("Failed to spill inventory: " .. tostring(result))
     end
     
-    -- Clear the inventory first (safe now since we've extracted the item data)
-    inventory.clear()
-    
-    -- Then spill each item using extracted item data
-    for _, item_data in ipairs(items_to_spill) do
-        pcall(function()
-            -- Use extracted item data to create item-on-ground entity
-            entity.surface.create_entity{
-                name = "item-on-ground",
-                position = entity.position,
-                stack = item_data
-            }
-        end)
-    end
-    
-    log_debug("Spilled " .. #items_to_spill .. " items on the ground")
+    log_debug("Spilled inventory using surface.spill_inventory()")
 end
 
--- Transfer inventory from dummy engineer to vehicle
-function neural_disconnect.transfer_inventory_to_vehicle(dummy_engineer, vehicle, vehicle_type)
+-- Transfer inventory from dummy engineer to vehicle, then player, then spill
+-- player_index is optional - if provided, will try to transfer to player inventory before spilling
+function neural_disconnect.transfer_inventory_to_vehicle(dummy_engineer, vehicle, vehicle_type, player_index)
     log_debug("Starting inventory transfer")
     
     local vehicle_name = "unknown"
@@ -371,6 +342,13 @@ function neural_disconnect.transfer_inventory_to_vehicle(dummy_engineer, vehicle
         log_debug("Vehicle is valid, name: " .. vehicle_name)
     else
         log_debug("Vehicle is nil or invalid!")
+    end
+    
+    -- Get player and player inventory if player_index is provided
+    local player = player_index and game.get_player(player_index)
+    local player_inventory = nil
+    if player and player.valid and player.character and player.character.valid then
+        player_inventory = player.character.get_main_inventory()
     end
     
     local dummy_inventory = dummy_engineer.get_main_inventory()
@@ -428,84 +406,102 @@ function neural_disconnect.transfer_inventory_to_vehicle(dummy_engineer, vehicle
     log_debug("Processing item transfer for " .. dummy_inventory.get_item_count() .. " main items" .. 
               (has_logistic_items and (" and " .. trash_inventory.get_item_count() .. " logistic items") or ""))
     
-    -- Collect all items to transfer (main inventory + logistic trash)
-    -- Store item data before clearing inventory
-    local items_to_transfer = {}
+    local overflow_stacks = {}  -- Store actual stack objects for overflow (preserves quality)
     
-    -- Copy main inventory contents - store item data
+    -- Try to insert each stack directly from inventory (this preserves quality)
+    -- Process main inventory
     if has_main_items then
         for i = 1, #dummy_inventory do
             local stack = dummy_inventory[i]
             if stack and stack.valid_for_read then
-                -- Store item data as a table (can't duplicate LuaItemStack directly)
-                table.insert(items_to_transfer, {
-                    name = stack.name,
-                    count = stack.count
-                })
+                local original_count = stack.count
+                
+                -- Insert the stack directly (preserves quality)
+                local inserted = vehicle_inventory.insert(stack)
+                
+                -- If not all were inserted, the remaining items are still in the stack
+                if inserted < original_count then
+                    table.insert(overflow_stacks, stack)
+                end
             end
         end
     end
     
-    -- Copy logistic trash inventory contents - store item data
+    -- Process logistic trash inventory
     if has_logistic_items and trash_inventory then
         for i = 1, #trash_inventory do
             local stack = trash_inventory[i]
             if stack and stack.valid_for_read then
-                -- Store item data as a table (can't duplicate LuaItemStack directly)
-                table.insert(items_to_transfer, {
-                    name = stack.name,
-                    count = stack.count
-                })
+                local original_count = stack.count
+                
+                -- Insert the stack directly (preserves quality)
+                local inserted = vehicle_inventory.insert(stack)
+                
+                -- If not all were inserted, the remaining items are still in the stack
+                if inserted < original_count then
+                    table.insert(overflow_stacks, stack)
+                end
             end
         end
     end
-
-    log_debug("Found " .. #items_to_transfer .. " items to transfer")
     
-    -- Clear dummy inventories (safe now since we've stored the item data)
+    -- If any items couldn't fit in vehicle, try player inventory first, then spill
+    if #overflow_stacks > 0 then
+        log_debug(#overflow_stacks .. " item stacks couldn't fit in vehicle")
+        
+        -- Try to transfer overflow to player inventory if available
+        local final_overflow_stacks = {}
+        if player_inventory then
+            for _, stack in ipairs(overflow_stacks) do
+                if stack and stack.valid_for_read then
+                    local original_count = stack.count
+                    
+                    -- Try to insert into player inventory (preserves quality)
+                    local inserted = player_inventory.insert(stack)
+                    
+                    -- If not all were inserted, add to final overflow for spilling
+                    if inserted < original_count then
+                        table.insert(final_overflow_stacks, stack)
+                    end
+                end
+            end
+        else
+            -- No player inventory available, all overflow will be spilled
+            final_overflow_stacks = overflow_stacks
+        end
+        
+        -- Spill any remaining overflow using spill_item_stack (preserves quality automatically)
+        if #final_overflow_stacks > 0 then
+            log_debug(#final_overflow_stacks .. " item stacks couldn't fit, spilling")
+            items_spilled = true
+            
+            -- Spill each overflow stack using built-in spill_item_stack (preserves quality)
+            for _, stack in ipairs(final_overflow_stacks) do
+                if stack and stack.valid_for_read then
+                    local success, result = pcall(function()
+                        return dummy_engineer.surface.spill_item_stack{
+                            position = dummy_engineer.position,
+                            stack = stack,  -- Pass the actual stack object (preserves quality)
+                            enable_looted = false,
+                            allow_belts = true,
+                            drop_full_stack = false
+                        }
+                    end)
+                    
+                    if not success then
+                        game.print("[Transfer] ERROR: Failed to spill overflow " .. stack.count .. "x " .. stack.name .. ": " .. tostring(result))
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Now clear the inventories (after we've spilled overflow)
     if has_main_items then
         dummy_inventory.clear()
     end
     if has_logistic_items and trash_inventory then
         trash_inventory.clear()
-    end
-
-    local overflow_items = {}
-    
-    -- Try to insert each item into the vehicle
-    for _, item_data in ipairs(items_to_transfer) do
-        -- Store original count
-        local original_count = item_data.count
-        
-        -- Try to insert into the vehicle inventory
-        local inserted = vehicle_inventory.insert(item_data)
-        
-        log_debug("Inserted " .. inserted .. " of " .. original_count .. " " .. item_data.name)
-        
-        -- If not all were inserted, store remaining for spilling
-        if inserted < original_count then
-            table.insert(overflow_items, {
-                name = item_data.name,
-                count = original_count - inserted
-            })
-        end
-    end
-    
-    -- If any items couldn't fit, spill them
-    if #overflow_items > 0 then
-        log_debug(#overflow_items .. " item stacks couldn't fit in vehicle, spilling")
-        items_spilled = true
-        
-        -- Spill each overflow item
-        for _, item_data in ipairs(overflow_items) do
-            pcall(function()
-                dummy_engineer.surface.create_entity{
-                    name = "item-on-ground",
-                    position = dummy_engineer.position,
-                    stack = item_data
-                }
-            end)
-        end
     end
     
     return items_spilled
@@ -865,7 +861,7 @@ function neural_disconnect.return_to_engineer(player, vehicle_type, specific_veh
         if not neural_disconnect.should_keep_alive(dummy_engineer) then
             -- Transfer items before destroying
             if vehicle and vehicle.valid then
-                neural_disconnect.transfer_inventory_to_vehicle(dummy_engineer, vehicle, actual_vehicle_type)
+                neural_disconnect.transfer_inventory_to_vehicle(dummy_engineer, vehicle, actual_vehicle_type, player.index)
             else
                 neural_disconnect.spill_inventory(dummy_engineer, dummy_engineer.get_main_inventory())
                 local trash_inventory = dummy_engineer.get_inventory(defines.inventory.character_trash)
@@ -919,7 +915,7 @@ function neural_disconnect.handle_character_death(player, vehicle_type)
         else
         -- Transfer items from dummy to vehicle or spill them
         local items_spilled = neural_disconnect.transfer_inventory_to_vehicle(dummy_engineer, connected_vehicle, 
-                                                                           control_data.vehicle_types[player_index])
+                                                                           control_data.vehicle_types[player_index], player_index)
         log_debug("Inventory transfer complete. Items spilled: " .. tostring(items_spilled))
 
         -- Get the position and surface of the dummy engineer before killing it

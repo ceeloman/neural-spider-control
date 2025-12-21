@@ -790,7 +790,6 @@ end
 -- Initialize the mod
 script.on_init(function()
     log_debug("Initializing Neural Vehicle Control")
-    if not storage then storage = {} end
     init_globals()
 
     if remote.interfaces["vehicle-control-centre"] then
@@ -802,6 +801,103 @@ script.on_init(function()
         log_debug("Vehicle Control centre not found, using fallback GUI")
         control_centre = local_control_centre  -- Use the locally loaded module
         register_gui_handlers()
+    end
+
+    -- Register player GUI toolbar buttons with shared toolbar utility
+    local shared_toolbar_available, shared_toolbar = pcall(require, "__ceelos-vehicle-gui-util__/lib/shared_toolbar")
+    if shared_toolbar_available and shared_toolbar then
+        -- Register "Neural Connect" button (only shown if no active connection)
+        shared_toolbar.register_player_gui_button("neural-spider-control", "neural_connect", {
+            sprite = "neural-connection-sprite",
+            tooltip = "Neural Connect",
+            vehicle_types = {"spider-vehicle", "car"},
+            priority = 5,
+            style = "slot_sized_button",
+            condition = function(player, selected_vehicles)
+                -- Only show if no active connection exists
+                if #selected_vehicles == 0 or not selected_vehicles[1] or not selected_vehicles[1].valid then
+                    return false
+                end
+                local vehicle = selected_vehicles[1]
+                if neural_disconnect and neural_disconnect.vehicle_has_active_connection then
+                    return not neural_disconnect.vehicle_has_active_connection(vehicle)
+                end
+                return true
+            end,
+            tags = function(player, selected_vehicles)
+                if #selected_vehicles > 0 and selected_vehicles[1] and selected_vehicles[1].valid then
+                    return {
+                        unit_number = selected_vehicles[1].unit_number,
+                        surface_index = selected_vehicles[1].surface.index
+                    }
+                end
+                return {}
+            end
+        })
+        
+        -- Register "Open Remote Engineer Inventory" button (only shown if dummy engineer exists)
+        shared_toolbar.register_player_gui_button("neural-spider-control", "open_engineer", {
+            sprite = "utility/player_force_icon",
+            tooltip = "Open Remote Engineer Inventory",
+            vehicle_types = {"spider-vehicle", "car"},
+            priority = 9,
+            style = "slot_sized_button",
+            condition = function(player, selected_vehicles)
+                -- Only show if dummy engineer exists
+                if #selected_vehicles == 0 or not selected_vehicles[1] or not selected_vehicles[1].valid then
+                    return false
+                end
+                local vehicle = selected_vehicles[1]
+                if neural_disconnect then
+                    -- Check for orphaned engineer
+                    if neural_disconnect.find_orphaned_engineer_for_vehicle then
+                        local dummy_engineer = neural_disconnect.find_orphaned_engineer_for_vehicle(vehicle)
+                        if dummy_engineer then
+                            return true
+                        end
+                    end
+                    -- Check for active dummy engineer in storage
+                    if storage.neural_spider_control and storage.neural_spider_control.dummy_engineers then
+                        for player_index, dummy_data in pairs(storage.neural_spider_control.dummy_engineers) do
+                            local dummy_entity = type(dummy_data) == "table" and dummy_data.entity or dummy_data
+                            if dummy_entity and dummy_entity.valid and dummy_entity.vehicle == vehicle then
+                                return true
+                            end
+                        end
+                    end
+                end
+                return false
+            end,
+            tags = function(player, selected_vehicles)
+                if #selected_vehicles == 0 or not selected_vehicles[1] or not selected_vehicles[1].valid then
+                    return {}
+                end
+                local vehicle = selected_vehicles[1]
+                local dummy_engineer = nil
+                if neural_disconnect then
+                    if neural_disconnect.find_orphaned_engineer_for_vehicle then
+                        dummy_engineer = neural_disconnect.find_orphaned_engineer_for_vehicle(vehicle)
+                    end
+                    if not dummy_engineer and storage.neural_spider_control and storage.neural_spider_control.dummy_engineers then
+                        for player_index, dummy_data in pairs(storage.neural_spider_control.dummy_engineers) do
+                            local dummy_entity = type(dummy_data) == "table" and dummy_data.entity or dummy_data
+                            if dummy_entity and dummy_entity.valid and dummy_entity.vehicle == vehicle then
+                                dummy_engineer = dummy_entity
+                                break
+                            end
+                        end
+                    end
+                end
+                if dummy_engineer and dummy_engineer.valid then
+                    return {
+                        engineer_unit_number = dummy_engineer.unit_number
+                    }
+                end
+                return {}
+            end
+        })
+        
+        log_debug("Neural Spider Control player GUI buttons registered")
     end
 
     log_debug("Initialization complete")
@@ -820,9 +916,100 @@ script.on_configuration_changed(function(data)
         register_with_vehicle_control_centre()
     else
         use_control_centre = false
-        log_debug("Vehicle Control centre not found on config change, using fallback GUI")
-        control_centre = local_control_centre  -- Use the locally loaded module
+        log_debug("Vehicle Control centre not found on config change")
+        control_centre = local_control_centre
         register_gui_handlers()
+    end
+    
+    -- Re-register player GUI toolbar buttons (in case mods were added/removed)
+    local shared_toolbar_available, shared_toolbar = pcall(require, "__ceelos-vehicle-gui-util__/lib/shared_toolbar")
+    if shared_toolbar_available and shared_toolbar then
+        -- Register "Neural Connect" button
+        shared_toolbar.register_player_gui_button("neural-spider-control", "neural_connect", {
+            sprite = "neural-connection-sprite",
+            tooltip = "Neural Connect",
+            vehicle_types = {"spider-vehicle", "car"},
+            priority = 5,
+            style = "slot_sized_button",
+            condition = function(player, selected_vehicles)
+                if #selected_vehicles == 0 or not selected_vehicles[1] or not selected_vehicles[1].valid then
+                    return false
+                end
+                local vehicle = selected_vehicles[1]
+                if neural_disconnect and neural_disconnect.vehicle_has_active_connection then
+                    return not neural_disconnect.vehicle_has_active_connection(vehicle)
+                end
+                return true
+            end,
+            tags = function(player, selected_vehicles)
+                if #selected_vehicles > 0 and selected_vehicles[1] and selected_vehicles[1].valid then
+                    return {
+                        unit_number = selected_vehicles[1].unit_number,
+                        surface_index = selected_vehicles[1].surface.index
+                    }
+                end
+                return {}
+            end
+        })
+        
+        -- Register "Open Remote Engineer Inventory" button
+        shared_toolbar.register_player_gui_button("neural-spider-control", "open_engineer", {
+            sprite = "utility/player_force_icon",
+            tooltip = "Open Remote Engineer Inventory",
+            vehicle_types = {"spider-vehicle", "car"},
+            priority = 9,
+            style = "slot_sized_button",
+            condition = function(player, selected_vehicles)
+                if #selected_vehicles == 0 or not selected_vehicles[1] or not selected_vehicles[1].valid then
+                    return false
+                end
+                local vehicle = selected_vehicles[1]
+                if neural_disconnect then
+                    if neural_disconnect.find_orphaned_engineer_for_vehicle then
+                        local dummy_engineer = neural_disconnect.find_orphaned_engineer_for_vehicle(vehicle)
+                        if dummy_engineer then
+                            return true
+                        end
+                    end
+                    if storage.neural_spider_control and storage.neural_spider_control.dummy_engineers then
+                        for player_index, dummy_data in pairs(storage.neural_spider_control.dummy_engineers) do
+                            local dummy_entity = type(dummy_data) == "table" and dummy_data.entity or dummy_data
+                            if dummy_entity and dummy_entity.valid and dummy_entity.vehicle == vehicle then
+                                return true
+                            end
+                        end
+                    end
+                end
+                return false
+            end,
+            tags = function(player, selected_vehicles)
+                if #selected_vehicles == 0 or not selected_vehicles[1] or not selected_vehicles[1].valid then
+                    return {}
+                end
+                local vehicle = selected_vehicles[1]
+                local dummy_engineer = nil
+                if neural_disconnect then
+                    if neural_disconnect.find_orphaned_engineer_for_vehicle then
+                        dummy_engineer = neural_disconnect.find_orphaned_engineer_for_vehicle(vehicle)
+                    end
+                    if not dummy_engineer and storage.neural_spider_control and storage.neural_spider_control.dummy_engineers then
+                        for player_index, dummy_data in pairs(storage.neural_spider_control.dummy_engineers) do
+                            local dummy_entity = type(dummy_data) == "table" and dummy_data.entity or dummy_data
+                            if dummy_entity and dummy_entity.valid and dummy_entity.vehicle == vehicle then
+                                dummy_engineer = dummy_entity
+                                break
+                            end
+                        end
+                    end
+                end
+                if dummy_engineer and dummy_engineer.valid then
+                    return {
+                        engineer_unit_number = dummy_engineer.unit_number
+                    }
+                end
+                return {}
+            end
+        })
     end
 
     for _, player in pairs(game.players) do
@@ -1040,31 +1227,31 @@ end)
 -- Handle map editor toggle - save connection state before entering editor
 script.on_event(defines.events.on_pre_player_toggled_map_editor, function(event)
     local player = game.get_player(event.player_index)
-    game.print("[MapEditor] on_pre_player_toggled_map_editor fired for player: " .. (player and player.name or "nil"))
+    -- game.print("[MapEditor] on_pre_player_toggled_map_editor fired for player: " .. (player and player.name or "nil"))
     if not player or not player.valid then 
-        game.print("[MapEditor] Player invalid, returning")
+        -- game.print("[MapEditor] Player invalid, returning")
         return 
     end
     
-    game.print("[MapEditor] Checking for neural connection...")
-    game.print("[MapEditor] storage.neural_spider_control exists: " .. tostring(storage.neural_spider_control ~= nil))
+    -- game.print("[MapEditor] Checking for neural connection...")
+    -- game.print("[MapEditor] storage.neural_spider_control exists: " .. tostring(storage.neural_spider_control ~= nil))
     
     -- Check if player is in a dummy engineer (has active neural connection)
     if storage.neural_spider_control and 
        storage.neural_spider_control.dummy_engineers and
        storage.neural_spider_control.dummy_engineers[player.index] then
         
-        game.print("[MapEditor] Found dummy_engineers entry for player")
+        -- game.print("[MapEditor] Found dummy_engineers entry for player")
         local dummy_data = storage.neural_spider_control.dummy_engineers[player.index]
         local dummy_engineer = type(dummy_data) == "table" and dummy_data.entity or dummy_data
         
-        game.print("[MapEditor] dummy_engineer valid: " .. tostring(dummy_engineer and dummy_engineer.valid))
-        game.print("[MapEditor] player.character: " .. tostring(player.character ~= nil))
-        game.print("[MapEditor] player.character == dummy_engineer: " .. tostring(player.character == dummy_engineer))
+        -- game.print("[MapEditor] dummy_engineer valid: " .. tostring(dummy_engineer and dummy_engineer.valid))
+        -- game.print("[MapEditor] player.character: " .. tostring(player.character ~= nil))
+        -- game.print("[MapEditor] player.character == dummy_engineer: " .. tostring(player.character == dummy_engineer))
         
         -- Verify the player is currently controlling this dummy engineer
         if dummy_engineer and dummy_engineer.valid and player.character == dummy_engineer then
-            game.print("[MapEditor] Player is controlling dummy engineer, saving state...")
+            -- game.print("[MapEditor] Player is controlling dummy engineer, saving state...")
             -- Save connection state for restoration after editor
             storage.map_editor_connections = storage.map_editor_connections or {}
             local vehicle = storage.neural_spider_control.connected_spidertrons[player.index]
@@ -1075,57 +1262,57 @@ script.on_event(defines.events.on_pre_player_toggled_map_editor, function(event)
                 vehicle_unit_number = vehicle_unit_number,
                 saved_at = game.tick
             }
-            game.print("[MapEditor] Saved state - dummy_engineer: " .. dummy_engineer.unit_number .. ", vehicle: " .. tostring(vehicle_unit_number))
+            -- game.print("[MapEditor] Saved state - dummy_engineer: " .. dummy_engineer.unit_number .. ", vehicle: " .. tostring(vehicle_unit_number))
             log_debug("Saved neural connection state for player " .. player.name .. " before entering map editor")
         else
-            game.print("[MapEditor] Player is NOT controlling dummy engineer - skipping save")
+            -- game.print("[MapEditor] Player is NOT controlling dummy engineer - skipping save")
         end
     else
-        game.print("[MapEditor] No dummy_engineers entry found for player")
+        -- game.print("[MapEditor] No dummy_engineers entry found for player")
     end
 end)
 
 -- Handle map editor toggle - restore connection after exiting editor
 script.on_event(defines.events.on_player_toggled_map_editor, function(event)
     local player = game.get_player(event.player_index)
-    game.print("[MapEditor] on_player_toggled_map_editor fired for player: " .. (player and player.name or "nil"))
+    -- game.print("[MapEditor] on_player_toggled_map_editor fired for player: " .. (player and player.name or "nil"))
     if not player or not player.valid then 
-        game.print("[MapEditor] Player invalid, returning")
+        -- game.print("[MapEditor] Player invalid, returning")
         return 
     end
     
     -- Check player's controller type to determine if they just exited editor mode
     -- If controller_type is NOT editor, they just exited editor mode
     local is_in_editor = player.controller_type == defines.controllers.editor
-    game.print("[MapEditor] Player controller_type: " .. tostring(player.controller_type) .. ", is_in_editor: " .. tostring(is_in_editor))
+    -- game.print("[MapEditor] Player controller_type: " .. tostring(player.controller_type) .. ", is_in_editor: " .. tostring(is_in_editor))
     
     -- Only restore when exiting editor mode (controller_type is NOT editor)
     if not is_in_editor then
-        game.print("[MapEditor] Editor mode turned OFF, checking for saved connection...")
+        -- game.print("[MapEditor] Editor mode turned OFF, checking for saved connection...")
         -- Check if we saved a connection state for this player
         if storage.map_editor_connections and storage.map_editor_connections[player.index] then
-            game.print("[MapEditor] Found saved connection state!")
+            -- game.print("[MapEditor] Found saved connection state!")
             local saved_state = storage.map_editor_connections[player.index]
-            game.print("[MapEditor] Saved state - dummy_engineer_unit_number: " .. tostring(saved_state.dummy_engineer_unit_number) .. 
-                      ", vehicle_unit_number: " .. tostring(saved_state.vehicle_unit_number))
+            -- game.print("[MapEditor] Saved state - dummy_engineer_unit_number: " .. tostring(saved_state.dummy_engineer_unit_number) .. 
+            --           ", vehicle_unit_number: " .. tostring(saved_state.vehicle_unit_number))
             
             -- Find the dummy engineer by unit number
             local dummy_engineer = saved_state.dummy_engineer_unit_number and 
                                    find_entity_by_unit_number(saved_state.dummy_engineer_unit_number) or nil
             
-            game.print("[MapEditor] Found dummy_engineer: " .. tostring(dummy_engineer ~= nil) .. 
-                      ", valid: " .. tostring(dummy_engineer and dummy_engineer.valid))
+            -- game.print("[MapEditor] Found dummy_engineer: " .. tostring(dummy_engineer ~= nil) .. 
+            --           ", valid: " .. tostring(dummy_engineer and dummy_engineer.valid))
             
             -- Find the vehicle by unit number
             local vehicle = saved_state.vehicle_unit_number and 
                            find_entity_by_unit_number(saved_state.vehicle_unit_number) or nil
             
-            game.print("[MapEditor] Found vehicle: " .. tostring(vehicle ~= nil) .. 
-                      ", valid: " .. tostring(vehicle and vehicle.valid))
+            -- game.print("[MapEditor] Found vehicle: " .. tostring(vehicle ~= nil) .. 
+            --           ", valid: " .. tostring(vehicle and vehicle.valid))
             
             -- Restore connection if both dummy engineer and vehicle are valid
             if dummy_engineer and dummy_engineer.valid and vehicle and vehicle.valid then
-                game.print("[MapEditor] Both entities valid, restoring connection...")
+                -- game.print("[MapEditor] Both entities valid, restoring connection...")
                 log_debug("Restoring neural connection for player " .. player.name .. " after exiting map editor")
                 
                 -- Set flag to prevent exit handler from interfering during restoration
@@ -1157,47 +1344,47 @@ script.on_event(defines.events.on_player_toggled_map_editor, function(event)
                 -- Verify original character is still stored (needed for disconnect)
                 if not storage.neural_spider_control.original_characters[player.index] or 
                    not storage.neural_spider_control.original_characters[player.index].valid then
-                    game.print("[MapEditor] WARNING: Original character not found or invalid!")
-                    game.print("[MapEditor] This may cause issues when disconnecting")
+                    -- game.print("[MapEditor] WARNING: Original character not found or invalid!")
+                    -- game.print("[MapEditor] This may cause issues when disconnecting")
                 else
-                    game.print("[MapEditor] Original character still valid: " .. storage.neural_spider_control.original_characters[player.index].unit_number)
+                    -- game.print("[MapEditor] Original character still valid: " .. storage.neural_spider_control.original_characters[player.index].unit_number)
                 end
                 
-                game.print("[MapEditor] Storage tables refreshed for connection tracking")
+                -- game.print("[MapEditor] Storage tables refreshed for connection tracking")
                 
                 -- Disconnect player from current character (if any)
-                game.print("[MapEditor] Disconnecting player from current character")
+                -- game.print("[MapEditor] Disconnecting player from current character")
                 player.character = nil
                 
                 -- Teleport player to vehicle's surface if needed
                 if player.surface ~= vehicle.surface then
-                    game.print("[MapEditor] Teleporting player to vehicle surface")
+                    -- game.print("[MapEditor] Teleporting player to vehicle surface")
                     player.teleport(vehicle.position, vehicle.surface)
                 end
                 
                 -- Reconnect player to dummy engineer
-                game.print("[MapEditor] Reconnecting player to dummy engineer")
+                -- game.print("[MapEditor] Reconnecting player to dummy engineer")
                 player.character = dummy_engineer
                 
                 -- Ensure dummy engineer is the driver of the vehicle
                 local current_driver = vehicle.get_driver()
-                game.print("[MapEditor] Current driver: " .. tostring(current_driver ~= nil))
+                -- game.print("[MapEditor] Current driver: " .. tostring(current_driver ~= nil))
                 if current_driver ~= dummy_engineer then
-                    game.print("[MapEditor] Setting dummy engineer as driver")
+                    -- game.print("[MapEditor] Setting dummy engineer as driver")
                     vehicle.set_driver(dummy_engineer)
                 end
                 
                 -- Ensure player is in the driver's seat
                 if player.character and player.character.valid then
                     if player.character.vehicle ~= vehicle or vehicle.get_driver() ~= player.character then
-                        game.print("[MapEditor] Ensuring player character is driver")
+                        -- game.print("[MapEditor] Ensuring player character is driver")
                         vehicle.set_driver(player.character)
                     end
                 end
                 
                 -- Verify the connection is properly recognized
                 local is_dummy = is_dummy_engineer(player.character)
-                game.print("[MapEditor] is_dummy_engineer check: " .. tostring(is_dummy))
+                -- game.print("[MapEditor] is_dummy_engineer check: " .. tostring(is_dummy))
                 
                 -- Clear the reconnecting flag now that we're done
                 if storage.reconnecting_players then
@@ -1210,23 +1397,23 @@ script.on_event(defines.events.on_player_toggled_map_editor, function(event)
                     color = {r=0, g=1, b=0}
                 }
                 
-                game.print("[MapEditor] Successfully restored neural connection!")
+                -- game.print("[MapEditor] Successfully restored neural connection!")
                 log_debug("Successfully restored neural connection for player " .. player.name)
             else
-                game.print("[MapEditor] FAILED to restore - dummy_engineer valid: " .. tostring(dummy_engineer and dummy_engineer.valid) .. 
-                         ", vehicle valid: " .. tostring(vehicle and vehicle.valid))
+                -- game.print("[MapEditor] FAILED to restore - dummy_engineer valid: " .. tostring(dummy_engineer and dummy_engineer.valid) .. 
+                --          ", vehicle valid: " .. tostring(vehicle and vehicle.valid))
                 log_debug("Could not restore connection: dummy_engineer valid=" .. tostring(dummy_engineer and dummy_engineer.valid) .. 
                          ", vehicle valid=" .. tostring(vehicle and vehicle.valid))
             end
             
             -- Clean up saved state
             storage.map_editor_connections[player.index] = nil
-            game.print("[MapEditor] Cleaned up saved state")
+            -- game.print("[MapEditor] Cleaned up saved state")
         else
-            game.print("[MapEditor] No saved connection state found for player")
+            -- game.print("[MapEditor] No saved connection state found for player")
         end
     else
-        game.print("[MapEditor] Player still in editor mode, skipping restore")
+        -- game.print("[MapEditor] Player still in editor mode, skipping restore")
     end
 end)
 
@@ -1337,165 +1524,16 @@ end)
 
 -- Add function to add buttons to player GUI toolbar (when holding spidertron remote)
 local function add_to_player_gui_toolbar(player)
-	if not player or not player.valid then return end
-	
-	-- Check if player is holding a spidertron remote
-	local selected_spiders = player.spidertron_remote_selection
-	local has_remote = selected_spiders ~= nil and #selected_spiders > 0
-	
-	if not has_remote then
-		return
-	end
-	
-	local left_gui = player.gui.left
-	if not left_gui then return end
-	
-	-- Check if spidertron-logistics toolbar exists
-	local sl_toolbar_name = "spidertron-logistics_player_gui_toolbar"
-	local sl_toolbar = left_gui[sl_toolbar_name]
-	
-	-- Check if VCC toolbar exists
-	local vcc_toolbar_name = "vehicle-control-center_player_gui_toolbar"
-	local vcc_toolbar = left_gui[vcc_toolbar_name]
-	
-	local toolbar = nil
-	local is_sl_toolbar = false
-	
-	if sl_toolbar and sl_toolbar.valid then
-		-- Use spidertron-logistics toolbar if it exists
-		toolbar = sl_toolbar
-		is_sl_toolbar = true
-	elseif vcc_toolbar and vcc_toolbar.valid then
-		-- Use VCC toolbar if it exists
-		toolbar = vcc_toolbar
-		is_sl_toolbar = false
-	else
-		-- No toolbar exists yet, wait for one to be created
-		return
-	end
-	
-	local button_frame = toolbar["button_frame"]
-	if not button_frame or not button_frame.valid then return end
-	
-	local button_flow = button_frame["button_flow"]
-	if not button_flow or not button_flow.valid then return end
-	
-	-- Get first selected spider for button actions
-	local spider = nil
-	if selected_spiders and #selected_spiders > 0 then
-		for _, s in ipairs(selected_spiders) do
-			if s and s.valid and (s.type == "spider-vehicle" or s.type == "car") then
-				spider = s
-				break
-			end
-		end
-	end
-	
-	if not spider then
-		return
-	end
-	
-	-- If using spidertron-logistics toolbar, they add the neural connect button themselves
-	-- So we only add our button if using VCC toolbar
-	if not is_sl_toolbar then
-		-- Check if neural connect button already exists (to avoid duplicates)
-		local neural_connect_name = "neural-spider-control_player_neural_connect"
-		local sl_neural_connect_name = "spidertron-logistics_player_neural_connect"
-		
-		-- Check if either button already exists
-		if not button_flow[neural_connect_name] and not button_flow[sl_neural_connect_name] then
-			-- Check if spidertron already has an active neural connection
-			local has_active_connection = false
-			if neural_disconnect and neural_disconnect.vehicle_has_active_connection then
-				has_active_connection = neural_disconnect.vehicle_has_active_connection(spider)
-			end
-			
-			-- Only show button if no active connection
-			if not has_active_connection then
-				-- Add "Neural Connect" button
-				local success, button = pcall(function()
-					return button_flow.add{
-						type = "sprite-button",
-						name = neural_connect_name,
-						sprite = "neural-connection-sprite",
-						tooltip = "Neural Connect",
-						style = "slot_sized_button",
-						tags = {
-							unit_number = spider.unit_number,
-							surface_index = spider.surface.index
-						}
-					}
-				end)
-				
-				if not success then
-					log_debug("Failed to add neural connect button: " .. tostring(button))
-				end
-			end
-		end
-	end
-	
-	-- Check if spidertron has a dummy engineer (active or orphaned)
-	-- This works for both toolbars
-	local has_dummy_engineer = false
-	local dummy_engineer = nil
-	if neural_disconnect then
-		-- Check for orphaned engineer
-		if neural_disconnect.find_orphaned_engineer_for_vehicle then
-			dummy_engineer = neural_disconnect.find_orphaned_engineer_for_vehicle(spider)
-			if dummy_engineer then
-				has_dummy_engineer = true
-			end
-		end
-		
-		-- Check for active dummy engineer in storage
-		if not has_dummy_engineer and storage.neural_spider_control and storage.neural_spider_control.dummy_engineers then
-			for player_index, dummy_data in pairs(storage.neural_spider_control.dummy_engineers) do
-				local dummy_entity = type(dummy_data) == "table" and dummy_data.entity or dummy_data
-				if dummy_entity and dummy_entity.valid and dummy_entity.vehicle == spider then
-					dummy_engineer = dummy_entity
-					has_dummy_engineer = true
-					break
-				end
-			end
-		end
-	end
-	
-	-- Add "Open Remote Engineer Inventory" button if there's a dummy engineer
-	-- This works for both toolbars
-	if has_dummy_engineer and dummy_engineer and dummy_engineer.valid then
-		local engineer_button_name = "neural-spider-control_player_open_engineer"
-		if not button_flow[engineer_button_name] then
-			local success, button = pcall(function()
-				return button_flow.add{
-					type = "sprite-button",
-					name = engineer_button_name,
-					sprite = "utility/player_force_icon",
-					tooltip = "Open Remote Engineer Inventory",
-					style = "slot_sized_button",
-					tags = {
-						engineer_unit_number = dummy_engineer.unit_number
-					}
-				}
-			end)
-			
-			if not success then
-				log_debug("Failed to add open engineer button: " .. tostring(button))
-			end
-		end
+	-- Use shared toolbar utility to get or create player GUI toolbar
+	-- Buttons are registered via shared_toolbar.register_player_gui_button() in init
+	local shared_toolbar_available, shared_toolbar = pcall(require, "__ceelos-vehicle-gui-util__/lib/shared_toolbar")
+	if shared_toolbar_available and shared_toolbar then
+		return shared_toolbar.get_or_create_player_gui_toolbar(player)
 	end
 end
 
--- Register tick handler to update player GUI toolbar
--- Run every tick (like VCC) to ensure buttons stay visible and don't get cleared
--- But only add buttons if they don't exist to avoid unnecessary work
-script.on_nth_tick(1, function(event)
-	-- Update player GUI toolbar for all players (check remote selection)
-	for _, player in pairs(game.players) do
-		if player and player.valid then
-			add_to_player_gui_toolbar(player)
-		end
-	end
-end)
+-- Toolbar creation is now handled automatically by ceelos-vehicle-gui-util
+-- No need to manually update toolbar - it's event-driven via on_player_cursor_stack_changed
 
 -- GUI event handlers
 script.on_event(defines.events.on_gui_click, combined_gui_click_handler)

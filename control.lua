@@ -9,7 +9,9 @@ local neural_connect = require("scripts.neural_connect")
 local neural_disconnect = require("scripts.neural_disconnect")
 local spidertron_gui = require("scripts.spidertron_gui")
 local mod_data = require("scripts.mod_data")
-local local_control_centre = require("scripts.control_centre")  -- Load this regardless
+-- local local_control_centre = require("scripts.control_centre")  -- Use VCC mod now
+local shared_toolbar_available, shared_toolbar = pcall(require, "__ceelos-vehicle-gui-util__/lib/shared_toolbar")
+
 
 -- Variable to hold the control_centre reference
 local control_centre = nil
@@ -432,26 +434,12 @@ function combined_gui_click_handler(event)
             
             if engineer and engineer.valid then
                 -- First center on the engineer (opens map view if needed, works across surfaces)
-                local success, error = pcall(function()
-                    player.centered_on = engineer
-                end)
+                player.centered_on = engineer
                 
-                if success then
-                    -- Then open the engineer's inventory
-                    success, error = pcall(function()
-                        player.opened = engineer
-                    end)
-                    
-                    if success then
-                        log_debug("Opened engineer inventory for player " .. player.name .. " (unit #" .. engineer_unit_number .. ")")
-                    else
-                        player.print("Failed to open engineer inventory: " .. tostring(error), {r=1, g=0.5, b=0})
-                        log_debug("Failed to open engineer inventory: " .. tostring(error))
-                    end
-                else
-                    player.print("Failed to center on engineer: " .. tostring(error), {r=1, g=0.5, b=0})
-                    log_debug("Failed to center on engineer: " .. tostring(error))
-                end
+                -- Then open the engineer's inventory
+                player.opened = engineer
+                
+                log_debug("Opened engineer inventory for player " .. player.name .. " (unit #" .. engineer_unit_number .. ")")
             else
                 player.print("Engineer no longer exists.", {r=1, g=0.5, b=0})
                 log_debug("Could not find engineer with unit_number " .. engineer_unit_number)
@@ -804,7 +792,6 @@ script.on_init(function()
     end
 
     -- Register player GUI toolbar buttons with shared toolbar utility
-    local shared_toolbar_available, shared_toolbar = pcall(require, "__ceelos-vehicle-gui-util__/lib/shared_toolbar")
     if shared_toolbar_available and shared_toolbar then
         -- Register "Neural Connect" button (only shown if no active connection)
         shared_toolbar.register_player_gui_button("neural-spider-control", "neural_connect", {
@@ -922,7 +909,6 @@ script.on_configuration_changed(function(data)
     end
     
     -- Re-register player GUI toolbar buttons (in case mods were added/removed)
-    local shared_toolbar_available, shared_toolbar = pcall(require, "__ceelos-vehicle-gui-util__/lib/shared_toolbar")
     if shared_toolbar_available and shared_toolbar then
         -- Register "Neural Connect" button
         shared_toolbar.register_player_gui_button("neural-spider-control", "neural_connect", {
@@ -1526,7 +1512,6 @@ end)
 local function add_to_player_gui_toolbar(player)
 	-- Use shared toolbar utility to get or create player GUI toolbar
 	-- Buttons are registered via shared_toolbar.register_player_gui_button() in init
-	local shared_toolbar_available, shared_toolbar = pcall(require, "__ceelos-vehicle-gui-util__/lib/shared_toolbar")
 	if shared_toolbar_available and shared_toolbar then
 		return shared_toolbar.get_or_create_player_gui_toolbar(player)
 	end

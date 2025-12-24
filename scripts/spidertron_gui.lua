@@ -43,14 +43,7 @@ function spidertron_gui.add_orphaned_engineer_button(player, vehicle_type, orpha
             end
             
             -- Get or create the shared toolbar
-            local success, toolbar = pcall(function()
-                return shared_toolbar.get_or_create_shared_toolbar(player, vehicle)
-            end)
-            
-            if not success then
-                log_debug("pcall failed to get shared toolbar, error: " .. tostring(toolbar))
-                return nil
-            end
+            local toolbar = shared_toolbar.get_or_create_shared_toolbar(player, vehicle)
             
             if not toolbar or not toolbar.valid then
                 log_debug("Toolbar is nil or invalid: " .. tostring(toolbar))
@@ -81,45 +74,24 @@ function spidertron_gui.add_orphaned_engineer_button(player, vehicle_type, orpha
             end
             
             -- Create the button in the shared toolbar
-            local glib_available, glib = pcall(require, "__glib__/glib")
-            local success2, button = pcall(function()
-                local btn
-                if glib_available and glib then
-                    -- Use glib.add like other buttons
-                    local refs = {}
-                    btn, refs = glib.add(button_flow, {
-                        args = {
-                            type = "sprite-button",
-                            name = shared_button_name,
-                            sprite = "utility/player_force_icon",
-                            tooltip = "Open Remote Engineer Inventory",
-                            style = "slot_sized_button"
-                        },
-                        ref = "orphaned_engineer"
-                    }, refs)
-                else
-                    -- Fallback to direct add
-                    btn = button_flow.add{
-                        type = "sprite-button",
-                        name = shared_button_name,
-                        sprite = "utility/player_force_icon",
-                        tooltip = "Open Remote Engineer Inventory",
-                        style = "slot_sized_button"
-                    }
-                end
-                return btn
-            end)
+            local btn = button_flow.add{
+                type = "sprite-button",
+                name = shared_button_name,
+                sprite = "utility/player_force_icon",
+                tooltip = "Open Remote Engineer Inventory",
+                style = "slot_sized_button"
+            }
             
-            if not success2 or not button or not button.valid then
+            if not btn or not btn.valid then
                 log_debug("Failed to create orphaned engineer button in shared toolbar")
                 return nil
             end
             
             -- Store engineer reference in button tags
-            button.tags = {engineer_unit_number = orphaned_engineer.unit_number}
+            btn.tags = {engineer_unit_number = orphaned_engineer.unit_number}
             
             log_debug("Added orphaned engineer button to shared toolbar for " .. player.name)
-            return button
+            return btn
         elseif vehicle_type == "car" then
             -- For cars, use the shared toolbar
             local vehicle = entity or player.opened
@@ -129,14 +101,7 @@ function spidertron_gui.add_orphaned_engineer_button(player, vehicle_type, orpha
             end
             
             -- Get or create the shared toolbar
-            local success, toolbar = pcall(function()
-                return shared_toolbar.get_or_create_shared_toolbar(player, vehicle)
-            end)
-            
-            if not success then
-                log_debug("pcall failed to get shared toolbar, error: " .. tostring(toolbar))
-                return nil
-            end
+            local toolbar = shared_toolbar.get_or_create_shared_toolbar(player, vehicle)
             
             if not toolbar or not toolbar.valid then
                 log_debug("Toolbar is nil or invalid: " .. tostring(toolbar))
@@ -167,45 +132,24 @@ function spidertron_gui.add_orphaned_engineer_button(player, vehicle_type, orpha
             end
             
             -- Create the button in the shared toolbar
-            local glib_available, glib = pcall(require, "__glib__/glib")
-            local success2, button = pcall(function()
-                local btn
-                if glib_available and glib then
-                    -- Use glib.add like other buttons
-                    local refs = {}
-                    btn, refs = glib.add(button_flow, {
-                        args = {
-                            type = "sprite-button",
-                            name = shared_button_name,
-                            sprite = "utility/player_force_icon",
-                            tooltip = "Open Remote Engineer Inventory",
-                            style = "slot_sized_button"
-                        },
-                        ref = "orphaned_engineer"
-                    }, refs)
-                else
-                    -- Fallback to direct add
-                    btn = button_flow.add{
-                        type = "sprite-button",
-                        name = shared_button_name,
-                        sprite = "utility/player_force_icon",
-                        tooltip = "Open Remote Engineer Inventory",
-                        style = "slot_sized_button"
-                    }
-                end
-                return btn
-            end)
+            local btn = button_flow.add{
+                type = "sprite-button",
+                name = shared_button_name,
+                sprite = "utility/player_force_icon",
+                tooltip = "Open Remote Engineer Inventory",
+                style = "slot_sized_button"
+            }
             
-            if not success2 or not button or not button.valid then
+            if not btn or not btn.valid then
                 log_debug("Failed to create orphaned engineer button in shared toolbar")
                 return nil
             end
             
             -- Store engineer reference in button tags
-            button.tags = {engineer_unit_number = orphaned_engineer.unit_number}
+            btn.tags = {engineer_unit_number = orphaned_engineer.unit_number}
             
             log_debug("Added orphaned engineer button to shared toolbar for car for " .. player.name)
-            return button
+            return btn
         else
             log_debug("Unknown vehicle type for GUI anchor: " .. vehicle_type)
             return nil
@@ -215,12 +159,15 @@ end
 -- Function to add the neural connect button to any vehicle GUI using relative GUI
 function spidertron_gui.add_neural_connect_button(player, vehicle_type, entity)
     -- Check if the button already exists to avoid duplicates
-    if player.gui.relative["spidertron_neural_connect_flow"] then
-        player.gui.relative["spidertron_neural_connect_flow"].destroy()
+    local button_name = "spidertron_neural_connect_flow"
+    local screen_button_name = "spidertron_neural_connect_screen_flow"
+
+    if player.gui.relative[button_name] then
+        player.gui.relative[button_name].destroy()
     end
     
-    if player.gui.screen["spidertron_neural_connect_screen_flow"] then
-        player.gui.screen["spidertron_neural_connect_screen_flow"].destroy()
+    if player.gui.screen[screen_button_name] then
+        player.gui.screen[screen_button_name].destroy()
     end
 
     -- Skip locomotives (feature removed - use in-game remote driving)
@@ -234,242 +181,114 @@ function spidertron_gui.add_neural_connect_button(player, vehicle_type, entity)
     
     -- For spider-vehicles, use the shared toolbar
     if vehicle_type == "spider-vehicle" then
-            -- Use the entity passed in, or fall back to player.opened
-            local vehicle = entity or player.opened
-            if not vehicle or not vehicle.valid or vehicle.type ~= "spider-vehicle" then
-                log_debug("No valid spider-vehicle for shared toolbar")
-                return nil
-            end
-            
-            -- Get or create the shared toolbar
-            local success, toolbar = pcall(function()
-                return shared_toolbar.get_or_create_shared_toolbar(player, vehicle)
-            end)
-            
-            if not success then
-                log_debug("pcall failed to get shared toolbar, error: " .. tostring(toolbar))
-                return nil
-            end
-            
-            if not toolbar or not toolbar.valid then
-                log_debug("Toolbar is nil or invalid: " .. tostring(toolbar))
-                return nil
-            end
-            
-            log_debug("Toolbar found/created: " .. toolbar.name .. ", type: " .. toolbar.type)
-            log_debug("Toolbar has " .. #toolbar.children .. " children")
-            
-            -- Navigate to button_flow
-            -- The toolbar structure is: toolbar -> button_frame -> button_flow
-            local button_frame = toolbar["button_frame"]
-            if not button_frame then
-                log_debug("Button frame not found by name, checking children...")
-                -- Try to find it in children
-                for _, child in ipairs(toolbar.children) do
-                    log_debug("Toolbar child: " .. tostring(child.name) .. ", type: " .. child.type)
-                    if child.name == "button_frame" then
-                        button_frame = child
-                        break
-                    end
-                end
-            end
-            
-            if not button_frame or not button_frame.valid then
-                log_debug("Button frame not found in toolbar after search")
-                return nil
-            end
-            
-            log_debug("Button frame found: " .. button_frame.name)
-            log_debug("Button frame has " .. #button_frame.children .. " children")
-            
-            local button_flow = button_frame["button_flow"]
-            if not button_flow then
-                log_debug("Button flow not found by name, checking children...")
-                -- Try to find it in children
-                for _, child in ipairs(button_frame.children) do
-                    log_debug("Button frame child: " .. tostring(child.name) .. ", type: " .. child.type)
-                    if child.name == "button_flow" then
-                        button_flow = child
-                        break
-                    end
-                end
-            end
-            
-            if not button_flow or not button_flow.valid then
-                log_debug("Button flow not found in button_frame after search")
-                return nil
-            end
-            
-            log_debug("Button flow found: " .. button_flow.name)
-            
-            -- Check if button already exists
-            local button_name = MOD_NAME .. "_neural_connect"
-            local existing_button = button_flow[button_name]
-            if existing_button and existing_button.valid then
-                log_debug("Neural connect button already exists: " .. button_name)
-                return existing_button
-            end
-            
-            -- Debug: Check button_flow children count before adding
-            log_debug("Button flow has " .. #button_flow.children .. " children before adding neural connect button")
-            
-            -- Create the button in the shared toolbar
-            -- Try using glib if available, otherwise use direct add
-            local glib_available, glib = pcall(require, "__glib__/glib")
-            local success2, button = pcall(function()
-                local btn
-                if glib_available and glib then
-                    -- Use glib.add like spidertron-logistics does
-                    local refs = {}
-                    btn, refs = glib.add(button_flow, {
-                        args = {
-                            type = "sprite-button",
-                            name = button_name,
-                            sprite = "neural-connection-sprite",
-                            tooltip = "Neural-Connect",
-                            style = "slot_sized_button"
-                        },
-                        ref = "neural_connect"
-                    }, refs)
-                    log_debug("Button created with glib, name: " .. tostring(btn.name) .. ", valid: " .. tostring(btn.valid))
-                else
-                    -- Fallback to direct add
-                    btn = button_flow.add{
-                        type = "sprite-button",
-                        name = button_name,
-                        sprite = "neural-connection-sprite",
-                        tooltip = "Neural-Connect",
-                        style = "slot_sized_button"
-                    }
-                    log_debug("Button created with direct add, name: " .. tostring(btn.name) .. ", valid: " .. tostring(btn.valid))
-                end
-                return btn
-            end)
-            
-            if not success2 then
-                log_debug("pcall failed to create button, error: " .. tostring(button))
-                return nil
-            end
-            
-            if not button or not button.valid then
-                log_debug("Button is nil or invalid: " .. tostring(button))
-                return nil
-            end
-            
-            -- Debug: Check button_flow children count after adding
-            log_debug("Button flow has " .. #button_flow.children .. " children after adding neural connect button")
-            
-            -- Verify the button is actually in the button_flow
-            local verify_button = button_flow[button_name]
-            if verify_button and verify_button.valid then
-                log_debug("Verified button exists in button_flow: " .. button_name)
-                log_debug("Button visible: " .. tostring(verify_button.visible))
-                log_debug("Button style: " .. tostring(verify_button.style))
-                log_debug("Button sprite: " .. tostring(verify_button.sprite))
-            else
-                log_debug("WARNING: Button not found in button_flow after creation!")
-            end
-            
-            -- Double-check by iterating children
-            log_debug("All buttons in button_flow:")
-            for i, child in ipairs(button_flow.children) do
-                log_debug("  [" .. i .. "] " .. tostring(child.name) .. " (" .. child.type .. ")")
-            end
-            
-            -- Also check if spidertron-logistics buttons exist
-            local sl_toggle = button_flow["spidertron-logistics_toggle"]
-            local sl_dump = button_flow["spidertron-logistics_dump"]
-            local sl_remote = button_flow["spidertron-logistics_remote"]
-            log_debug("Spidertron-logistics buttons: toggle=" .. tostring(sl_toggle ~= nil) .. ", dump=" .. tostring(sl_dump ~= nil) .. ", remote=" .. tostring(sl_remote ~= nil))
-            
-            log_debug("Added neural connect button to shared toolbar for " .. player.name .. " with name: " .. button_name)
-            return button
-        elseif vehicle_type == "car" then
-            -- For cars, use the shared toolbar
-            local vehicle = entity or player.opened
-            if not vehicle or not vehicle.valid or vehicle.type ~= "car" then
-                log_debug("No valid car for shared toolbar")
-                return nil
-            end
-            
-            -- Get or create the shared toolbar
-            local success, toolbar = pcall(function()
-                return shared_toolbar.get_or_create_shared_toolbar(player, vehicle)
-            end)
-            
-            if not success then
-                log_debug("pcall failed to get shared toolbar, error: " .. tostring(toolbar))
-                return nil
-            end
-            
-            if not toolbar or not toolbar.valid then
-                log_debug("Toolbar is nil or invalid: " .. tostring(toolbar))
-                return nil
-            end
-            
-            -- Navigate to button_flow
-            local button_frame = toolbar["button_frame"]
-            if not button_frame or not button_frame.valid then
-                log_debug("Button frame not found in toolbar")
-                return nil
-            end
-            
-            local button_flow = button_frame["button_flow"]
-            if not button_flow or not button_flow.valid then
-                log_debug("Button flow not found in button_frame")
-                return nil
-            end
-            
-            -- Check if button already exists
-            local button_name = MOD_NAME .. "_neural_connect"
-            local existing_button = button_flow[button_name]
-            if existing_button and existing_button.valid then
-                log_debug("Neural connect button already exists: " .. button_name)
-                return existing_button
-            end
-            
-            -- Create the button in the shared toolbar
-            local glib_available, glib = pcall(require, "__glib__/glib")
-            local success2, button = pcall(function()
-                local btn
-                if glib_available and glib then
-                    -- Use glib.add like spidertron-logistics does
-                    local refs = {}
-                    btn, refs = glib.add(button_flow, {
-                        args = {
-                            type = "sprite-button",
-                            name = button_name,
-                            sprite = "neural-connection-sprite",
-                            tooltip = "Neural-Connect",
-                            style = "slot_sized_button"
-                        },
-                        ref = "neural_connect"
-                    }, refs)
-                else
-                    -- Fallback to direct add
-                    btn = button_flow.add{
-                        type = "sprite-button",
-                        name = button_name,
-                        sprite = "neural-connection-sprite",
-                        tooltip = "Neural-Connect",
-                        style = "slot_sized_button"
-                    }
-                end
-                return btn
-            end)
-            
-            if not success2 or not button or not button.valid then
-                log_debug("Failed to create neural connect button in shared toolbar")
-                return nil
-            end
-            
-            log_debug("Added neural connect button to shared toolbar for car for " .. player.name)
-            return button
-        else
-            -- Default fallback or custom handling
-            log_debug("Unknown vehicle type for GUI anchor: " .. vehicle_type)
+        -- Use the entity passed in, or fall back to player.opened
+        local vehicle = entity or player.opened
+        if not vehicle or not vehicle.valid or vehicle.type ~= "spider-vehicle" then
+            log_debug("No valid spider-vehicle for shared toolbar")
             return nil
         end
+        
+        -- Get or create the shared toolbar
+        local toolbar = shared_toolbar.get_or_create_shared_toolbar(player, vehicle)
+        if not toolbar or not toolbar.valid then
+            log_debug("Toolbar is nil or invalid: " .. tostring(toolbar))
+            return nil
+        end
+        
+        -- Navigate to button_flow
+        local button_frame = toolbar["button_frame"]
+        if not button_frame or not button_frame.valid then
+            log_debug("Button frame not found in toolbar")
+            return nil
+        end
+        
+        local button_flow = button_frame["button_flow"]
+        if not button_flow or not button_flow.valid then
+            log_debug("Button flow not found in button_frame")
+            return nil
+        end
+        
+        -- Check if button already exists
+        local shared_button_name = MOD_NAME .. "_neural_connect"
+        local existing_button = button_flow[shared_button_name]
+        if existing_button and existing_button.valid then
+            log_debug("Neural connect button already exists: " .. shared_button_name)
+            return existing_button
+        end
+        
+        -- Create the button in the shared toolbar
+        local btn = button_flow.add{
+                        type = "sprite-button",
+                        name = shared_button_name,
+                        sprite = "neural-connection-sprite",
+                        tooltip = "Neural-Connect",
+                        style = "slot_sized_button"
+        }
+
+        if not btn or not btn.valid then
+            log_debug("Button is nil or invalid: " .. tostring(btn))
+            return nil
+            end
+
+        log_debug("Added neural connect button to shared toolbar for " .. player.name)
+            return btn
+    elseif vehicle_type == "car" then
+        -- For cars, use the shared toolbar
+        local vehicle = entity or player.opened
+        if not vehicle or not vehicle.valid or vehicle.type ~= "car" then
+            log_debug("No valid car for shared toolbar")
+            return nil
+        end
+        
+        -- Get or create the shared toolbar
+        local toolbar = shared_toolbar.get_or_create_shared_toolbar(player, vehicle)
+        if not toolbar or not toolbar.valid then
+            log_debug("Toolbar is nil or invalid: " .. tostring(toolbar))
+            return nil
+        end
+        
+        -- Navigate to button_flow
+        local button_frame = toolbar["button_frame"]
+        if not button_frame or not button_frame.valid then
+            log_debug("Button frame not found in toolbar")
+            return nil
+        end
+        
+        local button_flow = button_frame["button_flow"]
+        if not button_flow or not button_flow.valid then
+            log_debug("Button flow not found in button_frame")
+            return nil
+        end
+        
+        -- Check if button already exists
+        local shared_button_name = MOD_NAME .. "_neural_connect"
+        local existing_button = button_flow[shared_button_name]
+        if existing_button and existing_button.valid then
+            log_debug("Neural connect button already exists: " .. shared_button_name)
+            return existing_button
+        end
+        
+        -- Create the button in the shared toolbar
+        local btn = button_flow.add{
+                        type = "sprite-button",
+                        name = shared_button_name,
+                        sprite = "neural-connection-sprite",
+                        tooltip = "Neural-Connect",
+                        style = "slot_sized_button"
+        }
+
+        if not btn or not btn.valid then
+            log_debug("Button is nil or invalid: " .. tostring(btn))
+            return nil
+        end
+
+        log_debug("Added neural connect button to shared toolbar for car for " .. player.name)
+        return btn
+    else
+        -- Default fallback or custom handling
+        log_debug("Unknown vehicle type for GUI anchor: " .. vehicle_type)
+        return nil
+    end
 end
 
 -- Function to add vehicle-control-centre buttons to shared toolbar
@@ -492,11 +311,8 @@ function spidertron_gui.add_vehicle_control_centre_buttons(player, vehicle_type,
     end
     
     -- Get or create the shared toolbar
-    local success, toolbar = pcall(function()
-        return shared_toolbar.get_or_create_shared_toolbar(player, vehicle)
-    end)
-    
-    if not success or not toolbar or not toolbar.valid then
+    local toolbar = shared_toolbar.get_or_create_shared_toolbar(player, vehicle)
+    if not toolbar or not toolbar.valid then
         log_debug("Failed to get shared toolbar for vehicle-control-centre buttons")
         return
     end
@@ -514,38 +330,20 @@ function spidertron_gui.add_vehicle_control_centre_buttons(player, vehicle_type,
         return
     end
     
-    local glib_available, glib = pcall(require, "__glib__/glib")
-    
     -- Add "Call Spider" button
     local call_spider_name = MOD_NAME .. "_call_spider"
     if not button_flow[call_spider_name] then
-        local success2, button = pcall(function()
-            local btn
-            if glib_available and glib then
-                local refs = {}
-                btn, refs = glib.add(button_flow, {
-                    args = {
+        local btn = button_flow.add{
                         type = "sprite-button",
                         name = call_spider_name,
                         sprite = "utility/entity_info",
                         tooltip = "Call Spider (Open Control Centre)",
                         style = "slot_sized_button"
-                    },
-                    ref = "call_spider"
-                }, refs)
+        }
+
+        if not btn or not btn.valid then
+            log_debug("Failed to create call spider button")
             else
-                btn = button_flow.add{
-                    type = "sprite-button",
-                    name = call_spider_name,
-                    sprite = "utility/entity_info",
-                    tooltip = "Call Spider (Open Control Centre)",
-                    style = "slot_sized_button"
-                }
-            end
-            return btn
-        end)
-        
-        if success2 and button and button.valid then
             log_debug("Added call spider button to shared toolbar")
         end
     end
@@ -553,29 +351,13 @@ function spidertron_gui.add_vehicle_control_centre_buttons(player, vehicle_type,
     -- Add "Open Map Location" button
     local open_map_name = MOD_NAME .. "_open_map"
     if not button_flow[open_map_name] then
-        local success2, button = pcall(function()
-            local btn
-            if glib_available and glib then
-                local refs = {}
-                btn, refs = glib.add(button_flow, {
-                    args = {
+        local btn = button_flow.add{
                         type = "sprite-button",
                         name = open_map_name,
                         sprite = "utility/open_map",
                         tooltip = "Open Map at Vehicle Location",
                         style = "slot_sized_button"
-                    },
-                    ref = "open_map"
-                }, refs)
-            else
-                btn = button_flow.add{
-                    type = "sprite-button",
-                    name = open_map_name,
-                    sprite = "utility/open_map",
-                    tooltip = "Open Map at Vehicle Location",
-                    style = "slot_sized_button"
-                }
-            end
+        }
             -- Store vehicle position in button tags
             if btn and btn.valid then
                 btn.tags = {
@@ -583,10 +365,10 @@ function spidertron_gui.add_vehicle_control_centre_buttons(player, vehicle_type,
                     surface_index = vehicle.surface.index
                 }
             end
-            return btn
-        end)
-        
-        if success2 and button and button.valid then
+
+        if not btn or not btn.valid then
+            log_debug("Failed to create open map button")
+        else
             log_debug("Added open map button to shared toolbar")
         end
     else
@@ -603,37 +385,21 @@ function spidertron_gui.add_vehicle_control_centre_buttons(player, vehicle_type,
     -- Add "Open Vehicle Inventory" button
     local open_inventory_name = MOD_NAME .. "_open_inventory"
     if not button_flow[open_inventory_name] then
-        local success2, button = pcall(function()
-            local btn
-            if glib_available and glib then
-                local refs = {}
-                btn, refs = glib.add(button_flow, {
-                    args = {
+        local btn = button_flow.add{
                         type = "sprite-button",
                         name = open_inventory_name,
                         sprite = "utility/inventory",
                         tooltip = "Open Vehicle Inventory",
                         style = "slot_sized_button"
-                    },
-                    ref = "open_inventory"
-                }, refs)
-            else
-                btn = button_flow.add{
-                    type = "sprite-button",
-                    name = open_inventory_name,
-                    sprite = "utility/inventory",
-                    tooltip = "Open Vehicle Inventory",
-                    style = "slot_sized_button"
-                }
-            end
+        }
             -- Store vehicle unit number in button tags
             if btn and btn.valid then
                 btn.tags = {vehicle_unit_number = vehicle.unit_number}
             end
-            return btn
-        end)
-        
-        if success2 and button and button.valid then
+
+        if not btn or not btn.valid then
+            log_debug("Failed to create open inventory button")
+        else
             log_debug("Added open vehicle inventory button to shared toolbar")
         end
     else

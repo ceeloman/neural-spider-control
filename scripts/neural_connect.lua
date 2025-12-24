@@ -333,14 +333,8 @@ function neural_connect.connect_to_spidertron(command)
         orphaned_data = orphaned_data_check
     -- If no orphaned engineer, check if current driver is a dummy engineer (active connection or old data)
     elseif current_driver and current_driver.valid then
-        -- Safely check if current_driver is a character entity (has type property)
-        local driver_type = nil
-        local success, result = pcall(function() return current_driver.type end)
-        if success then
-            driver_type = result
-        end
-        
-        if driver_type == "character" then
+        -- Check if current_driver is a character entity
+        if current_driver.type == "character" then
             -- Check if it's in our dummy engineers storage (active connection)
             if storage.neural_spider_control and storage.neural_spider_control.dummy_engineers then
                 for player_idx, dummy_data in pairs(storage.neural_spider_control.dummy_engineers) do

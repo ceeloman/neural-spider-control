@@ -296,15 +296,6 @@ function neural_disconnect.cancel_crafting_queue(dummy_engineer)
     return false
 end
 
--- Helper function to safely get optional stack properties
-local function safe_get_property(stack, property_name, getter_func)
-    local ok, value = pcall(getter_func)
-    if ok then
-        return value
-    end
-    return nil
-end
-
 -- Spill the contents of an inventory onto the ground
 -- Uses built-in surface.spill_inventory() which automatically preserves quality
 function neural_disconnect.spill_inventory(entity, inventory)

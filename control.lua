@@ -354,9 +354,9 @@ function register_gui_handlers()
     script.on_event(defines.events.on_gui_click, combined_gui_click_handler)
     script.on_event(defines.events.on_gui_closed, function(event)
         spidertron_gui.on_gui_closed(event)
-        if control_centre.on_gui_closed then
-            control_centre.on_gui_closed(event)
-        end
+        -- if control_centre.on_gui_closed then
+        --     control_centre.on_gui_closed(event)
+        -- end
     end)
 end
 

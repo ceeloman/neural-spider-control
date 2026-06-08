@@ -82,6 +82,8 @@ local function init_globals()
     storage.neural_spider_control.connected_spidertron_ids = storage.neural_spider_control.connected_spidertron_ids or {}
     storage.neural_spider_control.original_character_ids = storage.neural_spider_control.original_character_ids or {}
     storage.neural_spider_control.dummy_engineer_ids = storage.neural_spider_control.dummy_engineer_ids or {}
+    -- Helper table to track entities by unit_number for quick lookup
+    storage.neural_spider_control.units = storage.neural_spider_control.units or {}
     
     
     -- Health check functions
@@ -153,7 +155,8 @@ local function clean_up_storage_data(player_index)
                 "connected_spidertron_ids",
                 "original_character_ids",
                 "dummy_engineer_ids",
-                "vehicle_types"
+                "vehicle_types",
+                "units"
             }) do
                 if control_data[table_name] then
                     control_data[table_name][player_index] = nil
@@ -176,6 +179,12 @@ local function clean_up_storage_data(player_index)
 end
 
 local function find_vehicle_by_unit_and_surface(unit_number, surface_index)
+    if storage.neural_spider_control.units[unit_number] then
+        local entity = storage.neural_spider_control.units[unit_number]
+        if entity and entity.valid and entity.surface_index == surface_index then
+            return entity
+        end
+    end
     local surface = game.get_surface(surface_index)
     if not surface then
         return nil
@@ -183,6 +192,7 @@ local function find_vehicle_by_unit_and_surface(unit_number, surface_index)
     local entities = surface.find_entities_filtered{type = {"spider-vehicle", "car", "locomotive"}}
     for _, entity in ipairs(entities) do
         if entity.unit_number == unit_number then
+            storage.neural_spider_control.units[unit_number] = entity
             return entity
         end
     end
